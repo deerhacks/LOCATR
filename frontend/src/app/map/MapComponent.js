@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import SearchBar from './SearchBar'
 
 const GLOBAL_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400&display=swap');
@@ -229,9 +230,22 @@ export default function MapComponent() {
           </span>
         </div>
 
-        {/* Bottom-left: Wordmark */}
+        {/* Top-center: Search bar */}
         {loaded && (
-          <div className="ui-reveal" style={{ position: 'absolute', bottom: 36, left: 24, zIndex: 10 }}>
+          <div style={{
+            position: 'absolute',
+            top: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 10,
+          }}>
+            <SearchBar onSearch={() => {}} />
+          </div>
+        )}
+
+        {/* Top-left: Wordmark + Live coordinates */}
+        {loaded && (
+          <div className="ui-reveal" style={{ position: 'absolute', top: 24, left: 24, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Pill>
               <CrosshairIcon size={10} color="rgba(255,255,255,0.60)" />
               <span style={{
@@ -245,12 +259,6 @@ export default function MapComponent() {
                 LOCATR
               </span>
             </Pill>
-          </div>
-        )}
-
-        {/* Top-left: Live coordinates */}
-        {loaded && (
-          <div className="ui-reveal-delayed" style={{ position: 'absolute', top: 24, left: 24, zIndex: 10 }}>
             <Pill style={{ gap: 8 }}>
               <span style={{
                 fontFamily: MONO,
