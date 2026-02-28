@@ -41,33 +41,45 @@ async def _firecrawl_map(website_url: str) -> list[str]:
     if not settings.FIRECRAWL_API_KEY:
         return []
 
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                f"{_FIRECRAWL_BASE}/map",
-                headers={"Authorization": f"Bearer {settings.FIRECRAWL_API_KEY}"},
-                json={
-                    "url": website_url,
-                    "search": "pricing rates cost fees menu package book reserve",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    f"{_FIRECRAWL_BASE}/map",
+                    headers={"Authorization": f"Bearer {settings.FIRECRAWL_API_KEY}"},
+                    json={
+                        "url": website_url,
+                        "search": "pricing rates cost fees menu package book reserve",
+                    },
+                )
+                if resp.status_code == 429:
+                    raise httpx.HTTPStatusError("429 Too Many Requests", request=resp.request, response=resp)
+                resp.raise_for_status()
+                data = resp.json()
 
-        all_links = data.get("links", [])
+            all_links = data.get("links", [])
 
-        # Filter for pricing / menu / rates pages
-        pricing_keywords = ["pric", "rate", "cost", "fee", "menu", "book", "package"]
-        relevant = [
-            link for link in all_links
-            if any(kw in link.lower() for kw in pricing_keywords)
-        ]
+            # Filter for pricing / menu / rates pages
+            pricing_keywords = ["pric", "rate", "cost", "fee", "menu", "book", "package"]
+            relevant = [
+                link for link in all_links
+                if any(kw in link.lower() for kw in pricing_keywords)
+            ]
 
-        return relevant if relevant else all_links[:3]
+            return relevant if relevant else all_links[:3]
 
-    except httpx.HTTPError as exc:
-        logger.warning("Firecrawl /map failed for %s: %s", website_url, exc)
-        return []
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429 and attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                logger.warning("Firecrawl /map rate limited (429). Retrying %s in %ss...", website_url, wait_time)
+                await asyncio.sleep(wait_time)
+                continue
+            logger.warning("Firecrawl /map failed for %s: %s", website_url, exc)
+            return []
+        except httpx.HTTPError as exc:
+            logger.warning("Firecrawl /map network error for %s: %s", website_url, exc)
+            return []
 
 
 async def _firecrawl_scrape(page_url: str) -> Optional[str]:
@@ -78,24 +90,36 @@ async def _firecrawl_scrape(page_url: str) -> Optional[str]:
     if not settings.FIRECRAWL_API_KEY:
         return None
 
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                f"{_FIRECRAWL_BASE}/scrape",
-                headers={"Authorization": f"Bearer {settings.FIRECRAWL_API_KEY}"},
-                json={
-                    "url": page_url,
-                    "formats": ["markdown"],
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    f"{_FIRECRAWL_BASE}/scrape",
+                    headers={"Authorization": f"Bearer {settings.FIRECRAWL_API_KEY}"},
+                    json={
+                        "url": page_url,
+                        "formats": ["markdown"],
+                    },
+                )
+                if resp.status_code == 429:
+                    raise httpx.HTTPStatusError("429 Too Many Requests", request=resp.request, response=resp)
+                resp.raise_for_status()
+                data = resp.json()
 
-        return data.get("data", {}).get("markdown", "")
+            return data.get("data", {}).get("markdown", "")
 
-    except httpx.HTTPError as exc:
-        logger.warning("Firecrawl /scrape failed for %s: %s", page_url, exc)
-        return None
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429 and attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                logger.warning("Firecrawl /scrape rate limited (429). Retrying %s in %ss...", page_url, wait_time)
+                await asyncio.sleep(wait_time)
+                continue
+            logger.warning("Firecrawl /scrape failed for %s: %s", page_url, exc)
+            return None
+        except httpx.HTTPError as exc:
+            logger.warning("Firecrawl /scrape network error for %s: %s", page_url, exc)
+            return None
 
 
 
@@ -111,15 +135,16 @@ Website content:
 {content}
 
 INSTRUCTIONS:
-1. Search for ANY pricing signals: hourly rates, per-person fees, packages, menu prices, rental costs, booking rates, membership fees, event packages.
-2. Identify hidden costs: shoe rentals, equipment fees, minimum spends, service charges, cleaning fees, parking fees, lane fees, food minimums.
-3. If you find EXPLICIT prices on the page, use them and set pricing_confidence to "confirmed".
-4. If prices are NOT explicitly listed, ESTIMATE based on:
+1. Search the text for ANY pricing signals: "$" signs, numbers, hourly rates, per-person fees, packages, menu prices, rental costs, booking rates, membership fees.
+2. Even if the text is messy or missing clear boundaries, if you see a price (e.g. "$25"), ASSUME it is the base cost unless context clearly says otherwise.
+3. Identify hidden costs: shoe rentals, equipment fees, minimum spends, service charges, cleaning fees, parking fees.
+4. If you find EXPLICIT prices on the page, use them and set pricing_confidence to "confirmed".
+5. If prices are NOT explicitly listed, or the text is a booking widget you can't read, ESTIMATE based on:
    - Typical Toronto market rates for this type of venue/activity
    - The venue's category and perceived quality
    - Group size of {group_size} people
    Set pricing_confidence to "estimated".
-5. NEVER return base_cost as 0 unless you are confident the activity is genuinely free. Bowling in Toronto typically costs $6-12 per person per game. Cafes cost $5-15 per person. Use your knowledge.
+6. NEVER return base_cost as 0 unless you are confident the activity is genuinely free. Escape rooms in Toronto typically cost $30-$45 per person. Rock climbing typically costs $25-$35 for a day pass. Use your knowledge.
 
 Respond with ONLY a valid JSON object (no markdown, no extra text):
 {{
@@ -228,8 +253,8 @@ def _no_data_fallback(venue: dict = None) -> dict:
 async def _analyze_venue_cost(venue: dict, group_size: int) -> dict:
     """
     Full cost pipeline for a single venue:
-    1. Try Firecrawl /map to find pricing pages
-    2. Firecrawl /scrape to get page content
+    1. Try Firecrawl /map to find pricing pages (may fail)
+    2. Firecrawl /scrape to get page content (always scrape website as fallback)
     3. Use Gemini to extract structured pricing
     """
     website = venue.get("website", "")
@@ -246,6 +271,7 @@ async def _analyze_venue_cost(venue: dict, group_size: int) -> dict:
 
         content_parts = []
         for target in pages_to_scrape:
+            logger.info("Cost Analyst scraping page: %s", target)
             content = await _firecrawl_scrape(target) or ""
             if content:
                 content_parts.append(f"--- Content from {target} ---\n{content}\n")
@@ -253,7 +279,10 @@ async def _analyze_venue_cost(venue: dict, group_size: int) -> dict:
         combined_content = "\n".join(content_parts)
 
     if not combined_content:
+        logger.warning("Venue %s had NO scraped content (Firecrawl returned nothing).", venue.get('name'))
         return _no_data_fallback(venue)
+    else:
+        logger.debug("Venue %s scraped content length: %s", venue.get('name'), len(combined_content))
 
     # Step 3: Extract pricing with Gemini
     return await _extract_pricing(venue, combined_content, group_size)
@@ -292,11 +321,62 @@ def cost_analyst_node(state: PathfinderState) -> PathfinderState:
         results = [_no_data_fallback(v) for v in candidates]
 
     cost_profiles = {}
+    requires_deposit = False
+    highest_cost = 0
+
     for venue, result in zip(candidates, results):
         vid = venue.get("venue_id", "")
         cost_profiles[vid] = result
+        
+        # Determine if a deposit/payment is required for the CIBA demo
+        # If any venue has a high cost (> $100), we'll trigger the Auth0 CIBA flow
+        base_cost = result.get("base_cost", 0)
+        if base_cost > highest_cost:
+            highest_cost = base_cost
+        if base_cost > 100:
+            requires_deposit = True
 
     scored = sum(1 for v in cost_profiles.values() if v.get("base_cost", 0) > 0)
     logger.info("Cost Analyst priced %d/%d venues", scored, len(candidates))
 
-    return {"cost_profiles": cost_profiles}
+    # --- CIBA Human-in-the-Loop Auth Flow ---
+    auth_user_id = state.get("auth_user_id")
+    payment_authorized = state.get("payment_authorized", False)
+    
+    # If the system detected a costly venue and we haven't paid yet, push a notification
+    if requires_deposit and auth_user_id and not payment_authorized:
+        logger.info(f"High cost detected (${highest_cost}). Triggering CIBA Auth for user {auth_user_id}")
+        
+        from app.services.auth0 import auth0_service
+        try:
+            # Trigger the push notification to the user's phone
+            prompt_msg = f"Pathfinder: Authorize ${highest_cost} deposit for your group activity?"
+            req_id = asyncio.run(auth0_service.trigger_ciba_auth(auth_user_id, prompt_msg))
+            
+            if req_id:
+                # Return the state with the pending request ID. 
+                # LangGraph should interpret this as an Interrupt/Wait state (handled in orchestration)
+                return {
+                    "cost_profiles": cost_profiles,
+                    "ciba_auth_req_id": req_id,
+                    "payment_authorized": False
+                }
+        except RuntimeError:
+            import nest_asyncio
+            nest_asyncio.apply()
+            prompt_msg = f"Pathfinder: Authorize ${highest_cost} deposit for your group activity?"
+            req_id = asyncio.run(auth0_service.trigger_ciba_auth(auth_user_id, prompt_msg))
+            if req_id:
+                return {
+                    "cost_profiles": cost_profiles,
+                    "ciba_auth_req_id": req_id,
+                    "payment_authorized": False
+                }
+        except Exception as e:
+            logger.warning(f"Failed to trigger CIBA: {e}")
+
+    # If already authorized or no deposit required, proceed normally
+    return {
+        "cost_profiles": cost_profiles,
+        "payment_authorized": payment_authorized
+    }

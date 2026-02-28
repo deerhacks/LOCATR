@@ -24,9 +24,24 @@ The system is built around a multi-agent LangGraph workflow, coordinated by a ce
 
 **Status:** ✅ Implemented
 - **Fallback Heuristics:** Keyword-based intent extraction when LLM services are unavailable.
-- **Planned: Auth0 Identity & Personalization:** Will use Auth0 Universal Login to identify the user and pull their "Identity Profile" (e.g., "Student budget", "Senior").
-  - **The Benefit:** Dynamically adjusts agent weights based on profile metadata.
-  - **Logic:** *"I know this is User A, who prefers low-cost venues. Setting Cost Analyst weight to 0.9."*
+- **Auth0 + Commander (UPDATED):** Uses Auth0 Universal Login to authenticate users and injects a sanitized "Identity Profile" containing roles and preferences (not raw tokens).
+  - **The Flow:** User authenticates → Backend receives `sub`, `roles`, `app_metadata` → Commander consumes sanitized Identity Profile.
+  - **The Benefit:** Dynamically adjusts agent weights based on profile metadata (e.g., student = higher cost weight).
+  - **Important Rule:** Agents never talk to Auth0 directly — only the Commander consumes identity context.
+  - **Identity Profile Schema (NEW):**
+    ```json
+    {
+      "user_id": "auth0|abc123",
+      "roles": ["student"],
+      "preferences": {
+        "budget_sensitivity": 0.9,
+        "vibe_sensitivity": 0.4,
+        "accessibility_needs": true
+      },
+      "risk_tolerance": "low",
+      "region": "ontario"
+    }
+    ```
 
 **Role:** Intent parser and weight configurator. LangGraph manages all routing and orchestration.
 **Model:** Gemini 1.5 Flash
@@ -63,8 +78,12 @@ The system is built around a multi-agent LangGraph workflow, coordinated by a ce
   - "Outdoor" / "weather" → Critic ↑
   - "Near me" / "transit" → Access Analyst ↑
 
+- **NEW: OAuth Requirement Detection:**
+  Detects whether OAuth-backed actions (like sending emails or checking calendars) are required, and determines the minimum necessary scopes.
+  - **Important Rule:** The Commander never touches tokens — it only declares the intent and adds action requirements to the execution plan.
+
 **Output:**
-A fully weighted execution plan passed into LangGraph.
+A fully weighted execution plan passed into LangGraph, annotated with OAuth requirements.
 
 **Structured Output Schema:**
 ```json
@@ -84,7 +103,10 @@ A fully weighted execution plan passed into LangGraph.
     "access_analyst": 0.8,
     "cost_analyst": 0.9,
     "critic": 0.7
-  }
+  },
+  "requires_oauth": true,
+  "oauth_scopes": ["calendar.read", "email.send"],
+  "allowed_actions": ["send_email", "check_availability"]
 }
 ```
 
@@ -103,6 +125,20 @@ A fully weighted execution plan passed into LangGraph.
 **Responsibilities:**
 - Discovers 5–10 candidate venues based on the Commander's intent.
 - Collects coordinates, ratings, reviews, photos, and category metadata.
+
+---
+
+### ⚡ Parallel Analyst Execution (UPDATED)
+
+**Nodes Executed in Parallel:**
+Once Scout completes, the following agents are launched concurrently using `asyncio.gather()`:
+- Node 3 — Vibe Matcher
+- Node 4 — Access Analyst
+- Node 5 — Cost Analyst (low priority)
+- Node 6 — Critic
+
+**Design Principle:**
+Any agent that does not depend on another agent's output must run in parallel. The Commander decides which of these nodes to run and which ones to skip based on the prompt given to it.
 
 ---
 
@@ -209,44 +245,50 @@ Accessibility scores + map-ready spatial data.
 ### Node 5: The COST ANALYST (Financial Node)
 
 **Status:** ✅ Implemented
-- **Confidence Tiers:** Confirmed pricing keeps Gemini's value_score; estimated pricing caps at 0.5; unknown pricing defaults to 0.3 with uncertainty warnings.
-- **Planned: Auth0 Secure Action Layer (CIBA):** Will implement a "Human-in-the-Loop" gate for real-world transactions.
-  - **The Flow:** Triggers a push notification (e.g., *"Authorize $20 for HoopDome?"*). Execution pauses until the user taps Approve.
+- **3️⃣ Auth0 Secure Actions — Human-in-the-Loop (REVISED):**
+  - **Tier A (Confirmed):** Price found officially. Triggers Auth0 CIBA push notification to authorize payment before LangGraph resumes.
+  - **Tier B (Estimated):** Price inferred. No payment. Prepares a booking inquiry email including Gemini's estimated price, and triggers Auth0 CIBA push notification to authorize sending the email.
+  - **Tier C (Unknown):** No reliable pricing. No payment. Prepares an availability and pricing inquiry email based on the Commander's parsed intent. Triggers Auth0 CIBA push notification to authorize sending the email.
 
-**Role:** "No-surprises" auditor.
+**Role:** "No-surprises" auditor and financial gatekeeper.
 **Model:** Gemini 2.5 Flash
-**Tools:** Firecrawl
+**Tools:** Firecrawl, Auth0 CIBA
 
 **Responsibilities:**
 
 - **Web Scraping Strategy (Firecrawl + Gemini 2.5 Flash):**
   1. **Semantic Search via Firecrawl `/map`** — Scans the venue's domain utilizing deep semantic search (e.g., matching keywords like "pricing", "rates", "fees", "menu") to discover the most relevant sub-pages.
-  2. **Multi-Page Aggregation** — Scrapes the top 3 pricing-related pages along with the venue's **homepage** (since many smaller venues embed prices directly on their main page).
-  3. **Holistic LLM Extraction** — Combines up to 50,000 characters of scraped markdown and feeds it into **Gemini 2.5 Flash** to extract complex pricing structures (base entry, gear rentals, taxes) directly into a structured JSON schema.
+  2. **Multi-Page Aggregation** — Scrapes the top 3 pricing-related pages along with the venue's homepage.
+  3. **Holistic LLM Extraction** — Combines scraped markdown and feeds it into **Gemini 2.5 Flash** to extract complex pricing structures.
 
-- Computes **Total Cost of Attendance (TCA)**:
-  - Hidden fees
-  - Equipment rentals
-  - Minimum spends
+- **🔁 Updated Cost Strategy:**
+  - **Pricing is augmentative, not critical-path:** Runs in parallel with Vibe, Access, and Critic. Never blocks final output unless explicitly required.
+  - **Graceful Degradation:** If Firecrawl fails, pricing falls back to Gemini estimation. If both fail, pricing is marked as unknown.
 
-- **Robust Fallback Systems:**
-  Gracefully handles unlisted pricing or interactive booking widgets by estimating rates based on the venue category and passing "High uncertainty" notes to the Critic node.
+- **Confidence-Aware Pricing (NEW):**
+  Every price displayed to the user includes explicit confidence labeling.
+  | Confidence | Meaning | UI Behavior |
+  |-------------|---------|-------------|
+  | `confirmed` | Scraped from official site | Normal display |
+  | `estimated` | LLM inferred | ⚠️ "Estimated" badge |
+  | `unknown` | No reliable signal | Greyed out + warning |
 
 **Output:**
-Transparent, normalized cost profiles per venue.
+Cost profiles and recommended facilitation actions (payments or outreach payloads).
 
 **Structured Output Schema:**
 ```json
 {
   "cost_profiles": {
     "gp_abc123": {
-      "base_cost": 25.00,
-      "hidden_costs": [{"label": "2-hr minimum", "amount": 25.00}],
       "total_cost_of_attendance": 50.00,
       "per_person": 5.00,
       "value_score": 0.78,
-      "pricing_confidence": "confirmed",
-      "notes": "Explicitly listed as $25/hr on the booking page."
+      "pricing_confidence": "estimated",
+      "price_source": "gemini_estimate",
+      "notes": "Pricing estimated based on similar venues. Verify before booking.",
+      "recommended_action": "outreach",
+      "outreach_intent": "availability_check"
     }
   }
 }
@@ -277,10 +319,15 @@ Transparent, normalized cost profiles per venue.
   - Marathon routes
   - Event congestion
 
-- **The Veto Mechanism:**
-  If a critical issue is found:
-  - Triggers a LangGraph retry
-  - Forces the Commander to re-rank candidates
+- **NEW: Fast-Fail Logic:**
+  The Critic can trigger early termination under two conditions:
+  - **Condition A — No Viable Options:** (e.g., "Fewer than 3 viable venues after risk filtering")
+  - **Condition B — Top Candidate Veto:** (e.g., "Outdoor venue during heavy rain + city marathon")
+
+  **Fast-Fail Behavior:**
+  - Skips Cost Analyst results (if still running).
+  - Triggers Commander retry (reprompts Node 2 in parallel to search for more options), OR
+  - Triggers immediate fallback explanation to the user.
 
 **Output:**
 Risk flags, veto signals, and explicit warnings.
@@ -309,6 +356,11 @@ Risk flags, veto signals, and explicit warnings.
 
 - Applies `agent_weights` to vibe, accessibility, cost, and critic scores → computes a composite ranked score per venue.
 - Runs `asyncio.gather()` with Gemini to generate `why` and `watch_out` text concurrently for all candidates.
+- **NEW: Chat Reprompting:** Facilitates a conversational loop. If the user provides feedback (e.g., "Do you have more budget-friendly options?"), this node triggers a reprompt back to Node 1 (The Commander) to restart the pipeline with the updated constraints.
+- **NEW: OAuth Interaction Layer:**
+  - Detects when an action planned by the Commander requires OAuth approval.
+  - Explains why the permission is needed in plain language.
+  - Triggers Auth0 OAuth or CIBA flows and pauses execution until user approval is granted.
 - Emits the final `ranked_results` list consumed by the `/plan` endpoint.
 
 **Note:** Commander, Scout, and Synthesiser always run. Vibe Matcher, Access Analyst, Cost Analyst, and Critic are conditionally activated based on `active_agents` from the Commander.
@@ -330,7 +382,12 @@ Risk flags, veto signals, and explicit warnings.
       "watch_out": "No lights — book before 5:30 PM on Saturday.",
       "isochrone_geojson": { "type": "FeatureCollection", "features": ["..."] }
     }
-  ]
+  ],
+  "action_request": {
+    "type": "oauth_consent",
+    "reason": "To email the venue on your behalf",
+    "scopes": ["email.send"]
+  }
 }
 ```
 
@@ -413,9 +470,9 @@ and PATHFINDER responds with a natural-sounding voice summary of its recommendat
 
 ---
 
-### 🪙 Solana — Booking & Payment Layer
+### 🪙 Solana — Booking & Payment Layer (Planned)
 
-Add an on-chain micro-payment or escrow system tied to PATHFINDER's venue recommendations.
+Add an on-chain micro-payment or escrow system tied to PATHFINDER's venue recommendations. **Note: For the current implementation, we are pretending this is implemented and integrated, but it is officially planned for future development.**
 
 **Key Ideas:**
 - **Deposit lock-in:** When PATHFINDER finds the best venue, users can lock in a deposit via Solana.
@@ -436,6 +493,19 @@ Host the multi-agent system on Vultr's cloud compute for production-grade perfor
 - **Scalable compute:** Scale agent workers independently based on traffic.
 
 **Integration Point:** Infrastructure layer — backend hosting, GPU compute, and deployment pipeline.
+
+### 🔐 Auth0 — OAuth Token Vault & Execution Authority
+
+OAuth allows PATHFINDER to move from planning to doing (checking calendars, sending emails, booking venues) — but only with explicit user permission.
+
+**Key Rule:** Agents reason. They do not act. No agent ever accesses OAuth tokens directly.
+
+**How it works (End-to-End Flow):**
+1. **Node 1 (Commander):** Detects if an action requires acting on behalf of the user and determines the required scopes (e.g., `email.send`). It never touches tokens.
+2. **Node 7 (Synthesizer):** Detects an OAuth requirement, explains to the user *why* permission is needed, and triggers the Auth0 flow. Execution pauses.
+3. **Infrastructure (Auth0):** Acts as the system's execution authority. It securely stores tokens, manages refresh/revocation, executes the approved action natively, and then signals LangGraph to resume.
+
+---
 
 ### ❄️ Snowflake — Persistence & RAG (Optional)
 Move the intelligence layer to a persistent database like Snowflake for long-term risk storage and predictive analysis.

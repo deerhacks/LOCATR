@@ -96,12 +96,25 @@ def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
         logger.error("Vibe Matcher failed: %s", exc)
         results = [None] * len(candidates)
 
-    # Build vibe_scores dict keyed by venue_id
+    # Build vibe_scores dict keyed by venue_id and filter candidates
     vibe_scores = {}
+    passed_candidates = []
+    
+    rejected_candidates = []
+    
     for venue, result in zip(candidates, results):
         vid = venue.get("venue_id", "")
         if result:
             vibe_scores[vid] = result
+            score = result.get("score", 0.5)
+            
+            # If the user explicitly requested a vibe (i.e. not the default neutral vibe)
+            # and the score is below our threshold (0.4), filter it out.
+            if vibe_pref != _NEUTRAL_VIBE and score < 0.4:
+                logger.info("Vibe Matcher REJECTED: %s (Score: %s)", venue.get('name'), score)
+                rejected_candidates.append((score, venue))
+            else:
+                passed_candidates.append(venue)
         else:
             # Graceful fallback — don't crash, just mark as unscored
             vibe_scores[vid] = {
@@ -110,9 +123,17 @@ def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
                 "descriptors": [],
                 "confidence": 0.0,
             }
+            passed_candidates.append(venue)
 
-    logger.info("Vibe Matcher scored %d/%d venues",
+    # Backup mechanism: ensure we pass at least 3 venues if Scout provided enough.
+    rejected_candidates.sort(key=lambda x: x[0], reverse=True)
+    while len(passed_candidates) < 3 and rejected_candidates:
+        score, venue = rejected_candidates.pop(0)
+        logger.info("Vibe Matcher RECOVERED: %s (Score: %s) to maintain minimum options", venue.get('name'), score)
+        passed_candidates.append(venue)
+
+    logger.info("Vibe Matcher scored %d venues; kept %d/%d candidates",
                 sum(1 for v in vibe_scores.values() if v.get("score") is not None),
-                len(candidates))
+                len(passed_candidates), len(candidates))
 
-    return {"vibe_scores": vibe_scores}
+    return {"vibe_scores": vibe_scores, "candidate_venues": passed_candidates}
