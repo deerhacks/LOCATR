@@ -233,19 +233,40 @@ def commander_node(state: PathfinderState) -> PathfinderState:
 
     Steps
     -----
-    1. Call Gemini 1.5 Flash to classify intent & extract parameters.
-    2. Determine complexity tier (quick / full / adversarial).
-    3. Compute dynamic agent weights based on keywords.
-    4. Query Snowflake for historical risk pre-check.
-    5. Return updated state with parsed_intent, complexity_tier, agent_weights.
+    1. Check Auth0 identity and load user profile metadata.
+    2. Call Gemini 1.5 Flash to classify intent & extract parameters.
+    3. Determine complexity tier (quick / full / adversarial).
+    4. Compute dynamic agent weights based on keywords and user profile.
+    5. Return updated state with parsed_intent, complexity_tier, agent_weights, user_profile.
 
     Fallback: If Gemini is unavailable, use keyword-based heuristics.
     """
     raw_prompt = state.get("raw_prompt", "")
+    auth_user_id = state.get("auth_user_id")
+    
+    # ── Fetch Auth0 Profile if available ──
+    user_profile = state.get("user_profile")
+    if auth_user_id and not user_profile:
+        from app.services.auth0 import auth0_service
+        try:
+            user_profile = asyncio.run(auth0_service.get_user_profile(auth_user_id))
+        except RuntimeError:
+            import nest_asyncio
+            nest_asyncio.apply()
+            user_profile = asyncio.run(auth0_service.get_user_profile(auth_user_id))
+        except Exception as e:
+            logger.warning(f"Failed to fetch user profile in Commander: {e}")
+            user_profile = {}
+    
+    profile_context = ""
+    if user_profile:
+        prefs = user_profile.get("app_metadata", {}).get("preferences", {})
+        if prefs:
+            profile_context = f"\nUser Preferences Context: {json.dumps(prefs)}\nAdjust agent weights to favor these preferences."
 
     prompt = f"""
     You are the PATHFINDER Commander Agent. Analyze the user's query and output a JSON execution plan.
-    Query: "{raw_prompt}"
+    Query: "{raw_prompt}"{profile_context}
     
     Determine:
     1. Intent parameters (activity, group_size, budget, location, vibe).
@@ -254,6 +275,7 @@ def commander_node(state: PathfinderState) -> PathfinderState:
        - 'tier_2': Multi-factor personal (Group activity, constraints -> Scout, Cost, Access, Critic, maybe Vibe)
        - 'tier_3': Strategic/Business (Deep research -> all 5 agents)
     3. Active Agents: List the agents to activate from: ["scout", "vibe_matcher", "access_analyst", "cost_analyst", "critic"]. Scout is always mandatory.
+       IMPORTANT: DO NOT activate "vibe_matcher" unless the user's query specifically mentions aesthetics, vibes, beauty, theme, or atmosphere. For all other queries, omit it.
     4. Agent Weights: Assign a float (0.0 to 1.0) to each activated agent indicating its importance.
     
     Output exactly in this JSON format:
@@ -298,4 +320,5 @@ def commander_node(state: PathfinderState) -> PathfinderState:
         "complexity_tier": plan.get("complexity_tier", "tier_2"),
         "active_agents": plan.get("active_agents", ["scout"]),
         "agent_weights": plan.get("agent_weights", {"scout": 1.0}),
+        "user_profile": user_profile,  # Pass profile down to other agents
     }

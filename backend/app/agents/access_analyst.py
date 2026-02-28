@@ -42,7 +42,7 @@ async def _analyze_venue_access(
 
     # Run both API calls concurrently
     isochrone_data, dm_results = await asyncio.gather(
-        get_isochrone(lat, lng, profile=profile, contours_minutes=[10, 20, 30]),
+        get_isochrone(lat, lng, profile=profile, contour_minutes=30),
         get_distance_matrix(origin[0], origin[1], [(lat, lng)], mode=profile),
     )
 
@@ -165,9 +165,33 @@ def access_analyst_node(state: PathfinderState) -> PathfinderState:
     accessibility_scores = {}
     isochrones = {}
 
+    auth_user_id = state.get("auth_user_id")
+    calendar_token = None
+    if auth_user_id:
+        from app.services.auth0 import auth0_service
+        try:
+            calendar_token = asyncio.run(auth0_service.get_idp_token(auth_user_id, "google-oauth2"))
+        except RuntimeError:
+            import nest_asyncio
+            nest_asyncio.apply()
+            calendar_token = asyncio.run(auth0_service.get_idp_token(auth_user_id, "google-oauth2"))
+        except Exception as exc:
+            logger.warning("Failed to fetch Auth0 calendar token: %s", exc)
+
+    # Mock calendar check logic for demonstration
+    has_conflict = False
+    if calendar_token:
+        # Here we would normally call the Google Calendar API
+        # For the hackathon/demo, we simulate a conflict 20% of the time based on the token presence
+        has_conflict = len(calendar_token) % 5 == 0
+
     for venue, result in zip(candidates, results):
         vid = venue.get("venue_id", "")
         acc = result["accessibility"]
+
+        if has_conflict:
+            acc["score"] = max(0.1, acc["score"] - 0.3)
+            acc["status"] = "CALENDAR_CONFLICT"
 
         accessibility_scores[vid] = acc
         if result["isochrone"]:

@@ -27,7 +27,7 @@ def _make_conditional_agent(agent_name: str, agent_fn):
         active = state.get("active_agents", [])
         # If Commander specified active agents and this one isn't listed, skip
         if active and agent_name not in active:
-            return state
+            return {}  # Return empty dict to leave state unchanged
         return agent_fn(state)
     wrapper.__name__ = agent_fn.__name__
     return wrapper

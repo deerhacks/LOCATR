@@ -3,7 +3,7 @@ Application configuration — loaded from environment variables.
 """
 
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -28,8 +28,11 @@ class Settings(BaseSettings):
     # ── Firecrawl ──
     FIRECRAWL_API_KEY: str = ""
 
-    # ── CORS ──
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    # ── Auth0 ──
+    AUTH0_DOMAIN: Optional[str] = None
+    AUTH0_CLIENT_ID: Optional[str] = None
+    AUTH0_CLIENT_SECRET: Optional[str] = None
+    AUTH0_AUDIENCE: Optional[str] = None
 
     model_config = {
         "env_file": ".env",
