@@ -209,6 +209,65 @@ async def api_health():
     return {"status": "ok"}
 
 
+# ── Vibe Heatmap ─────────────────────────────────────────
+
+# 48 vibe dimensions in vector order (indices 0-47).
+# Matches the ordered list used when CAFE_VIBE_VECTORS was populated.
+VIBE_LABELS = [
+    "aesthetic", "cozy", "chill", "trendy", "hipster",
+    "romantic", "classy", "upscale", "fancy", "elegant", "modern",
+    "rustic", "bohemian", "artsy", "quirky", "retro", "vintage",
+    "minimalist", "industrial", "dark academia", "cottagecore",
+    "cyberpunk", "neon", "instagrammable", "photogenic", "cute",
+    "charming", "intimate", "lively", "energetic", "fun", "exciting",
+    "relaxing", "peaceful", "calm", "serene", "warm", "inviting",
+    "atmosphere", "ambiance", "mood", "theme", "decor", "design",
+    "beautiful", "pretty", "gorgeous", "stunning",
+]
+
+
+@router.get("/vibe-heatmap")
+async def vibe_heatmap(vibe_index: int):
+    """
+    Return all cafe venues with their score for the given vibe dimension.
+    vibe_index: integer 0-47 corresponding to VIBE_LABELS.
+    Response: { vibes: [str], points: [{ lat, lng, score, name }] }
+    """
+    if vibe_index < 0 or vibe_index >= len(VIBE_LABELS):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"vibe_index must be 0-{len(VIBE_LABELS)-1}")
+
+    from app.services.snowflake import _get_connection
+    import json as _json
+
+    conn = _get_connection()
+    if not conn:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Snowflake unavailable")
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT NAME, LATITUDE, LONGITUDE, VIBE_VECTOR FROM CAFE_VIBE_VECTORS "
+            "WHERE LATITUDE IS NOT NULL AND LONGITUDE IS NOT NULL"
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    points = []
+    for name, lat, lng, vec in rows:
+        try:
+            if isinstance(vec, str):
+                vec = _json.loads(vec)
+            score = float(vec[vibe_index])
+        except (TypeError, IndexError, ValueError):
+            continue
+        points.append({"lat": lat, "lng": lng, "score": score, "name": name})
+
+    return {"vibes": VIBE_LABELS, "points": points}
+
+
 # ── Voice TTS ────────────────────────────────────────────
 
 

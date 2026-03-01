@@ -10,6 +10,7 @@ import AgentSidebar from './AgentSidebar'
 import ResultsSidebar from './ResultsSidebar'
 import Sidebar from './Sidebar'
 import PreferencesPanel from './PreferencesPanel'
+import VibeFilter from './VibeFilter'
 
 const GLOBAL_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400&family=Inter:wght@300;400;500&display=swap');
@@ -121,6 +122,8 @@ export default function MapComponent() {
 
   const { user } = useUser()
   const [showPrefs, setShowPrefs] = useState(false)
+  const [selectedVibe, setSelectedVibe] = useState(null) // { index, name } | null
+  const [lastQuery, setLastQuery] = useState('')
 
   const [loaded, setLoaded] = useState(false)
   const [center, setCenter] = useState({ lng: -79.3470, lat: 43.6515 })
@@ -184,6 +187,90 @@ export default function MapComponent() {
     }
   }, [results])
 
+  // Heatmap layer lifecycle — add/remove when selectedVibe changes
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loaded) return
+
+    const SOURCE_ID = 'vibe-heatmap'
+    const LAYER_ID  = 'vibe-heatmap-layer'
+
+    const cleanup = () => {
+      if (map.getLayer(LAYER_ID))  map.removeLayer(LAYER_ID)
+      if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID)
+    }
+
+    const shouldShow = selectedVibe !== null && lastQuery.toLowerCase().includes('cafe')
+    if (!shouldShow) {
+      cleanup()
+      return
+    }
+
+    const apiBase = (process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000')
+      .replace(/^ws(s?):\/\//, 'http$1://')
+
+    fetch(`${apiBase}/api/vibe-heatmap?vibe_index=${selectedVibe.index}`)
+      .then(r => r.json())
+      .then(({ points }) => {
+        if (!map.loaded()) return
+        cleanup()
+
+        const geojson = {
+          type: 'FeatureCollection',
+          features: points.map(p => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+            properties: { score: p.score },
+          })),
+        }
+
+        map.addSource(SOURCE_ID, { type: 'geojson', data: geojson })
+        map.addLayer(
+          {
+            id: LAYER_ID,
+            type: 'heatmap',
+            source: SOURCE_ID,
+            paint: {
+              'heatmap-weight': [
+                'interpolate', ['linear'], ['get', 'score'],
+                0, 0,
+                1, 1,
+              ],
+              'heatmap-intensity': [
+                'interpolate', ['linear'], ['zoom'],
+                0, 1,
+                12, 3,
+              ],
+              'heatmap-color': [
+                'interpolate', ['linear'], ['heatmap-density'],
+                0,   'rgba(0,0,0,0)',
+                0.2, 'rgba(90,40,180,0.35)',
+                0.5, 'rgba(150,60,230,0.65)',
+                0.8, 'rgba(200,110,255,0.82)',
+                1,   'rgba(240,200,255,0.95)',
+              ],
+              'heatmap-radius': [
+                'interpolate', ['linear'], ['zoom'],
+                0, 20,
+                12, 40,
+              ],
+              'heatmap-opacity': 0.78,
+            },
+          },
+          // Insert below 3D buildings so buildings appear on top
+          '3d-buildings',
+        )
+      })
+      .catch(err => console.error('[VibeHeatmap]', err))
+
+    return cleanup
+  }, [selectedVibe, lastQuery, loaded])
+
+  const handleVibeSelect = (index, name) => {
+    setSelectedVibe(index !== null ? { index, name } : null)
+  }
+
+
   const handleNewSearch = () => {
     markersRef.current.forEach(m => m.remove())
     markersRef.current = []
@@ -193,11 +280,13 @@ export default function MapComponent() {
     setActiveAgent(null)
     setSelectedVenueIdx(0)
     setActionRequest(null)
+    setLastQuery('')
   }
 
   const handleSearch = (query) => {
     markersRef.current.forEach(m => m.remove())
     markersRef.current = []
+    setLastQuery(query)
     setSearchState('searching')
     setActiveAgent(null)
     setAgentLogs([])
@@ -395,7 +484,7 @@ export default function MapComponent() {
           </span>
         </div>
 
-        {/* Top-center: Search bar */}
+        {/* Top-center: Search bar — centered exactly on screen */}
         {loaded && (
           <div style={{
             position: 'absolute',
@@ -407,6 +496,22 @@ export default function MapComponent() {
             <SearchBar
               onSearch={handleSearch}
               disabled={searchState === 'searching'}
+            />
+          </div>
+        )}
+
+        {/* Vibe filter button — anchored to right edge of centered search bar */}
+        {/* 290px = half of 580px (searchbar width), 8px gap */}
+        {loaded && (
+          <div style={{
+            position: 'absolute',
+            top: 24,
+            left: 'calc(50% + 298px)',
+            zIndex: 10,
+          }}>
+            <VibeFilter
+              onVibeSelect={handleVibeSelect}
+              selectedVibe={selectedVibe}
             />
           </div>
         )}

@@ -25,7 +25,7 @@ function SearchIcon({ size = 13, color = 'currentColor' }) {
 
 export default function SearchBar({
   onSearch = () => {},
-  placeholder = "search 'basketball courts in downtown TO for 10 people at 5pm'",
+  placeholder = "search 'open recreation basketball court in downtown toronto for 5 people'",
   disabled = false,
 }) {
   const [query, setQuery] = useState('')
