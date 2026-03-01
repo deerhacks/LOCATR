@@ -1,5 +1,6 @@
 import './globals.css'
-import { Inter, Inclusive_Sans, PT_Serif } from "next/font/google";
+import { PT_Serif } from "next/font/google";
+import { UserProvider } from '@auth0/nextjs-auth0/client'
 
 const ptSerif = PT_Serif({
   weight: "400",
@@ -17,7 +18,11 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className={`${ptSerif.variable}`}>{children}</body>
+      <body className={`${ptSerif.variable}`}>
+        <UserProvider>
+          {children}
+        </UserProvider>
+      </body>
     </html>
   )
 }

@@ -482,9 +482,123 @@ function VenueCard({ venue, rankIdx, isSelected, onSelect }) {
   )
 }
 
-function ResultsContent({ venues, globalConsensus, selectedIdx, onSelect, onNewSearch }) {
+function PersonalizationBadge({ userProfile }) {
+  const prefs = userProfile?.app_metadata?.preferences
+  if (!prefs) return null
+
+  const hints = []
+  if (prefs.budget_sensitive) hints.push('Cost ↑ (budget-sensitive profile)')
+  if (prefs.vibe_first) hints.push('Vibe ↑ (aesthetic preference)')
+  if (prefs.risk_averse) hints.push('Critic ↑ (risk-averse profile)')
+  if (hints.length === 0) return null
+
+  return (
+    <div style={{
+      margin: '0 20px 8px',
+      padding: '8px 12px',
+      borderRadius: 6,
+      background: 'rgba(110, 224, 110, 0.07)',
+      border: '1px solid rgba(110,224,110,0.18)',
+    }}>
+      <div style={{
+        fontFamily: MONO,
+        fontSize: 11,
+        letterSpacing: '0.18em',
+        color: '#6ee06e',
+        textTransform: 'uppercase',
+        marginBottom: 4,
+      }}>
+        Auth0 Personalization Active
+      </div>
+      {hints.map((h, i) => (
+        <div key={i} style={{ fontFamily: BODY, fontSize: 12, color: 'rgba(110,224,110,0.75)', lineHeight: 1.4 }}>
+          {h}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function OAuthConsentModal({ actionRequest, onDismiss }) {
+  if (!actionRequest) return null
+
+  const scopeLabels = {
+    'email.send': 'Send emails on your behalf',
+    'calendar.read': 'Read your calendar',
+    'calendar.write': 'Create calendar events',
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0,0,0,0.60)',
+      backdropFilter: 'blur(4px)',
+    }}>
+      <div style={{
+        background: '#1a1814',
+        border: '1px solid rgba(255,255,255,0.10)',
+        borderRadius: 12,
+        padding: '28px 32px',
+        maxWidth: 420,
+        width: '90vw',
+      }}>
+        <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.88)', textTransform: 'uppercase', marginBottom: 12 }}>
+          Permission Required
+        </div>
+        <div style={{ fontFamily: BODY, fontSize: 14, color: 'rgba(255,255,255,0.60)', lineHeight: 1.55, marginBottom: 16 }}>
+          {actionRequest.reason || 'LOCATR needs additional permissions to complete this action.'}
+        </div>
+        {actionRequest.scopes?.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.16em', color: 'rgba(255,255,255,0.35)', marginBottom: 8 }}>REQUESTED SCOPES</div>
+            {actionRequest.scopes.map((scope, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#e0a060', flexShrink: 0 }} />
+                <span style={{ fontFamily: BODY, fontSize: 13, color: 'rgba(255,255,255,0.65)' }}>
+                  {scopeLabels[scope] ?? scope}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <a
+            href={`/api/auth/login?scope=openid profile email${actionRequest.scopes?.map(s => ' ' + s).join('') ?? ''}`}
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '9px 0 8px',
+              borderRadius: 7, background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)',
+              fontFamily: MONO, fontSize: 12, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.88)',
+              textTransform: 'uppercase', textDecoration: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            Allow
+          </a>
+          <button
+            onClick={onDismiss}
+            style={{
+              flex: 1, padding: '9px 0 8px',
+              borderRadius: 7, background: 'transparent', border: '1px solid rgba(255,255,255,0.08)',
+              fontFamily: MONO, fontSize: 12, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.35)',
+              textTransform: 'uppercase', cursor: 'pointer',
+            }}
+          >
+            Deny
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ResultsContent({ venues, globalConsensus, selectedIdx, onSelect, onNewSearch, userProfile }) {
   return (
     <>
+      {/* Personalization badge */}
+      <PersonalizationBadge userProfile={userProfile} />
+
       {/* Global consensus */}
       {globalConsensus && (
         <div style={{
@@ -611,6 +725,10 @@ export default function Sidebar({
   selectedIdx,
   onSelect,
   onNewSearch,
+  actionRequest,
+  onDismissAction,
+  userProfile,
+  agentWeights,
 }) {
   const { width, onMouseDown } = useResizable(400)
   const [activeTab, setActiveTab] = useState('logs')
@@ -628,6 +746,8 @@ export default function Sidebar({
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: SIDEBAR_STYLES }} />
+
+      <OAuthConsentModal actionRequest={actionRequest} onDismiss={onDismissAction} />
 
       {/* Sidebar panel */}
       <div
@@ -714,6 +834,8 @@ export default function Sidebar({
             selectedIdx={selectedIdx}
             onSelect={onSelect}
             onNewSearch={onNewSearch}
+            userProfile={userProfile}
+            agentWeights={agentWeights}
           />
         )}
       </div>

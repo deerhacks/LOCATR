@@ -231,9 +231,9 @@ def commander_node(state: PathfinderState) -> PathfinderState:
     # ── Fetch Auth0 Profile if available ──
     user_profile = state.get("user_profile")
     if auth_user_id and not user_profile:
-        if auth_user_id == "auth0|local_test" or not auth_user_id.startswith("auth0|"):
-            logger.info("[COMMANDER] Skipping Auth0 Management API lookup for simulated/non-standard user_id — using standard profile.")
-            user_profile = {"app_metadata": {"preferences": {"budget_sensitive": False, "vibe_first": True}}} # standard profile
+        if auth_user_id == "auth0|local_test":
+            logger.info("[COMMANDER] Skipping Auth0 Management API lookup for local test user.")
+            user_profile = {}
         else:
             from app.services.auth0 import auth0_service
             try:
@@ -322,11 +322,15 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
         logger.warning("[COMMANDER] Gemini call failed: %s — using keyword fallback", e)
         plan = _keyword_fallback(raw_prompt)
 
+    agent_weights = plan.get("agent_weights", {"scout": 1.0})
+    if user_profile:
+        agent_weights = _apply_user_profile_weights(agent_weights, user_profile)
+
     output = {
         "parsed_intent": plan.get("parsed_intent", {}),
         "complexity_tier": plan.get("complexity_tier", "tier_2"),
         "active_agents": plan.get("active_agents", ["scout"]),
-        "agent_weights": plan.get("agent_weights", {"scout": 1.0}),
+        "agent_weights": agent_weights,
         "requires_oauth": plan.get("requires_oauth", False),
         "oauth_scopes": plan.get("oauth_scopes", []),
         "allowed_actions": plan.get("allowed_actions", []),

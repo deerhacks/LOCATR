@@ -1,6 +1,6 @@
 # System Architecture Documentation
 
-## Project: PATHFINDER
+## Project: LOCATR
 
 **Goal:** Intelligent, vibe-aware group activity and venue planning with predictive risk analysis and spatial visualization.
 
@@ -8,7 +8,7 @@
 
 ## 🏗️ Architecture Overview
 
-PATHFINDER is an agentic, graph-orchestrated decision system designed to recommend where groups should go—not just based on availability, but on vibe, accessibility, cost realism, and failure risk.
+LOCATR is an agentic, graph-orchestrated decision system designed to recommend where groups should go—not just based on availability, but on vibe, accessibility, cost realism, and failure risk.
 
 The system is built around a multi-agent LangGraph workflow, coordinated by a central Orchestrator (the Commander).
 
@@ -18,7 +18,7 @@ The system is built around a multi-agent LangGraph workflow, coordinated by a ce
 
 ---
 
-## 🧭 PATHFINDER: Integrated Agentic Workflow
+## 🧭 LOCATR: Integrated Agentic Workflow
 
 ### Node 1: The COMMANDER (Orchestrator Node)
 
@@ -516,7 +516,7 @@ Add a dedicated agent for review aggregation, competitor density mapping, and so
 
 Add a conversational voice layer so users can speak queries
 (e.g. *"find me a birthday venue for 25 kids under $500"*)
-and PATHFINDER responds with a natural-sounding voice summary of its recommendations.
+and LOCATR responds with a natural-sounding voice summary of its recommendations.
 
 **Key Ideas:**
 - **Speech-to-Text input** → feeds directly into the Commander's intent parser.
@@ -532,10 +532,10 @@ and PATHFINDER responds with a natural-sounding voice summary of its recommendat
 
 ### 🪙 Solana — Booking & Payment Layer (Planned)
 
-Add an on-chain micro-payment or escrow system tied to PATHFINDER's venue recommendations. **Note: For the current implementation, we are pretending this is implemented and integrated, but it is officially planned for future development.**
+Add an on-chain micro-payment or escrow system tied to LOCATR's venue recommendations. **Note: For the current implementation, we are pretending this is implemented and integrated, but it is officially planned for future development.**
 
 **Key Ideas:**
-- **Deposit lock-in:** When PATHFINDER finds the best venue, users can lock in a deposit via Solana.
+- **Deposit lock-in:** When LOCATR finds the best venue, users can lock in a deposit via Solana.
 - **Tokenised group cost-splitting:** If 10 people are splitting a court rental, a Solana transaction handles instant, near-zero-fee splits.
 - **Escrow protection:** Funds are held until the booking is confirmed, providing trust for both sides.
 
@@ -556,7 +556,7 @@ Host the multi-agent system on Vultr's cloud compute for production-grade perfor
 
 ### 🔐 Auth0 — OAuth Token Vault & Execution Authority
 
-OAuth allows PATHFINDER to move from planning to doing (checking calendars, sending emails, booking venues) — but only with explicit user permission.
+OAuth allows LOCATR to move from planning to doing (checking calendars, sending emails, booking venues) — but only with explicit user permission.
 
 **Key Rule:** Agents reason. They do not act. No agent ever accesses OAuth tokens directly.
 
@@ -684,7 +684,7 @@ Each agent opens with a separator line and a `[AGENT] ── STARTING` header, l
 
 ## 🎯 Demo Strategy
 
-Three pre-tested queries that showcase PATHFINDER's versatility — demonstrating the system isn't a one-trick demo but a genuine **location intelligence platform**.
+Three pre-tested queries that showcase LOCATR's versatility — demonstrating the system isn't a one-trick demo but a genuine **location intelligence platform**.
 
 ### Query 1 — Personal / Fun
 
