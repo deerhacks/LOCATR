@@ -57,10 +57,10 @@ function CrosshairIcon({ size = 14, color = 'currentColor' }) {
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} fill="none" style={{ flexShrink: 0 }}>
       <circle cx={r} cy={r} r={1.4} fill={color} />
-      <line x1={r} y1={0}        x2={r}    y2={r - gap} stroke={color} strokeWidth={0.9} />
-      <line x1={r} y1={r + gap}  x2={r}    y2={size}    stroke={color} strokeWidth={0.9} />
-      <line x1={0}        y1={r} x2={r - gap} y2={r}    stroke={color} strokeWidth={0.9} />
-      <line x1={r + gap}  y1={r} x2={size}    y2={r}    stroke={color} strokeWidth={0.9} />
+      <line x1={r} y1={0} x2={r} y2={r - gap} stroke={color} strokeWidth={0.9} />
+      <line x1={r} y1={r + gap} x2={r} y2={size} stroke={color} strokeWidth={0.9} />
+      <line x1={0} y1={r} x2={r - gap} y2={r} stroke={color} strokeWidth={0.9} />
+      <line x1={r + gap} y1={r} x2={size} y2={r} stroke={color} strokeWidth={0.9} />
     </svg>
   )
 }
@@ -90,11 +90,14 @@ function formatCoord(val, pos, neg) {
   return `${Math.abs(val).toFixed(4)}° ${val >= 0 ? pos : neg}`
 }
 
-function createMarkerEl(rankIdx) {
+function createMarkerEl(rankIdx, venue) {
   const COLORS = ['#e8c84a', '#b0b8c4', '#c8905a', 'rgba(255,255,255,0.55)']
-  const color  = COLORS[Math.min(rankIdx, 3)]
-  const size   = rankIdx === 0 ? 36 : 28
-  const el     = document.createElement('div')
+  let color = COLORS[Math.min(rankIdx, 3)]
+  if (venue?.has_historical_risk) {
+    color = '#FF0000'
+  }
+  const size = rankIdx === 0 ? 36 : 28
+  const el = document.createElement('div')
   el.dataset.rank = rankIdx
   Object.assign(el.style, {
     width: `${size}px`, height: `${size}px`,
@@ -109,6 +112,7 @@ function createMarkerEl(rankIdx) {
     boxShadow: `0 0 ${rankIdx === 0 ? '14px 4px' : '8px 2px'} ${color}66`,
     transition: 'transform 0.2s ease, box-shadow 0.2s ease',
     userSelect: 'none', pointerEvents: 'auto',
+    animation: venue?.has_historical_risk ? 'locatr-pulse 2s ease infinite' : 'none',
   })
   el.textContent = String(rankIdx + 1)
   return el
@@ -168,7 +172,7 @@ export default function MapComponent() {
     setSelectedVenueIdx(0)
 
     venues.forEach((venue, i) => {
-      const el = createMarkerEl(i)
+      const el = createMarkerEl(i, venue)
       const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
         .setLngLat([venue.lng, venue.lat])
         .addTo(mapRef.current)
@@ -193,10 +197,10 @@ export default function MapComponent() {
     if (!map || !loaded) return
 
     const SOURCE_ID = 'vibe-heatmap'
-    const LAYER_ID  = 'vibe-heatmap-layer'
+    const LAYER_ID = 'vibe-heatmap-layer'
 
     const cleanup = () => {
-      if (map.getLayer(LAYER_ID))  map.removeLayer(LAYER_ID)
+      if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID)
       if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID)
     }
 
@@ -243,11 +247,11 @@ export default function MapComponent() {
               ],
               'heatmap-color': [
                 'interpolate', ['linear'], ['heatmap-density'],
-                0,   'rgba(0,0,0,0)',
+                0, 'rgba(0,0,0,0)',
                 0.2, 'rgba(90,40,180,0.35)',
                 0.5, 'rgba(150,60,230,0.65)',
                 0.8, 'rgba(200,110,255,0.82)',
-                1,   'rgba(240,200,255,0.95)',
+                1, 'rgba(240,200,255,0.95)',
               ],
               'heatmap-radius': [
                 'interpolate', ['linear'], ['zoom'],
@@ -412,7 +416,7 @@ export default function MapComponent() {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => initMap([pos.coords.longitude, pos.coords.latitude]),
-        ()    => initMap(FALLBACK),
+        () => initMap(FALLBACK),
         { timeout: 6000, maximumAge: 60000 }
       )
     } else {
@@ -565,24 +569,24 @@ export default function MapComponent() {
         {/* Sidebar — searching + results */}
         {searchState !== 'idle' && (
           <Sidebar
-          searchState={searchState}
-          logs={agentLogs}
-          activeAgent={activeAgent}
-          venues={results?.venues}
-          globalConsensus={results?.global_consensus}
-          selectedIdx={selectedVenueIdx}
-          onSelect={(i) => {
-            setSelectedVenueIdx(i);
-            const v = results?.venues[i];
-            if (v) {
-              mapRef.current?.flyTo({ center: [v.lng, v.lat], zoom: 17, duration: 900 });
-            }
-          }}
-          onNewSearch={handleNewSearch}
-          actionRequest={actionRequest}
-          onDismissAction={() => setActionRequest(null)}
-          userProfile={results?.user_profile}
-          agentWeights={results?.agent_weights}
+            searchState={searchState}
+            logs={agentLogs}
+            activeAgent={activeAgent}
+            venues={results?.venues}
+            globalConsensus={results?.global_consensus}
+            selectedIdx={selectedVenueIdx}
+            onSelect={(i) => {
+              setSelectedVenueIdx(i);
+              const v = results?.venues[i];
+              if (v) {
+                mapRef.current?.flyTo({ center: [v.lng, v.lat], zoom: 17, duration: 900 });
+              }
+            }}
+            onNewSearch={handleNewSearch}
+            actionRequest={actionRequest}
+            onDismissAction={() => setActionRequest(null)}
+            userProfile={results?.user_profile}
+            agentWeights={results?.agent_weights}
           />
         )}
 

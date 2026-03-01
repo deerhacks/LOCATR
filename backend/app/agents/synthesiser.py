@@ -73,6 +73,13 @@ def _compute_composite_score(
     cost_profile = cost_profiles.get(venue_id, {})
     cost_score = cost_profile.get("value_score", 0.5)
 
+    # Historical Veto Penalty: Lower vibe_score by 0.5 if high-severity historical risk exists
+    risks = risk_flags.get(venue_id, [])
+    for r in risks:
+        if isinstance(r, dict) and r.get("type") == "historical_veto" and r.get("severity") == "high":
+            vibe_score = max(0.0, vibe_score - 0.5)
+            break
+
     # Risk penalty: high-severity risks reduce the score
     risks = risk_flags.get(venue_id, [])
     risk_penalty = 0.0
@@ -176,7 +183,7 @@ async def _generate_global_consensus(top_venues: list, raw_prompt: str) -> tuple
         return "Based on the options, these venues are the strongest matches.", ""
 
 
-def synthesiser_node(state: PathfinderState) -> PathfinderState:
+async def synthesiser_node(state: PathfinderState) -> PathfinderState:
     """
     Final synthesis: rank venues and produce human-readable results.
 
@@ -222,8 +229,11 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
     top_venues = scored[:3]
     logger.info("[SYNTH] Crafting explanations for top %d venues...", len(top_venues))
 
-    async def _explain_all():
-        return await asyncio.gather(*[
+
+
+    # Step 3: Generate explanations for top 3 concurrently
+    try:
+        explanations = await asyncio.gather(*[
             _generate_explanation(
                 venue=venue,
                 vibe_data=vibe_scores.get(vid, {}),
@@ -233,22 +243,32 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
             )
             for _, venue, vid in top_venues
         ])
-
-    try:
-        explanations = asyncio.run(_explain_all())
-    except RuntimeError:
-        import nest_asyncio
-        nest_asyncio.apply()
-        explanations = asyncio.run(_explain_all())
     except Exception as exc:
         logger.error("[SYNTH] Explanation generation failed: %s", exc)
         explanations = [{"why": "", "watch_out": ""} for _ in top_venues]
 
     # Step 4: Build ranked_results
     ranked_results = []
+    has_any_hist_risk = False
+
     for rank, ((composite, venue, vid), explanation) in enumerate(zip(top_venues, explanations), 1):
         vibe_entry = vibe_scores.get(vid, {})
         cost_entry = cost_profiles.get(vid, {})
+        risks = risk_flags.get(vid, [])
+
+        # Check for historical vetoes
+        has_hist = False
+        memo_alert = ""
+        for r in risks:
+            if isinstance(r, dict) and r.get("type") == "historical_veto":
+                has_hist = True
+                has_any_hist_risk = True
+                memo_alert = f"MEMORY ALERT: {r.get('detail', '').replace('[HISTORICAL RISK] ', '')}. "
+                break
+
+        watch_out = explanation.get("watch_out", "")
+        if has_hist:
+            watch_out = f"{memo_alert}{watch_out}"
 
         result = {
             "rank": rank,
@@ -257,24 +277,24 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
             "lat": venue.get("lat", 0.0),
             "lng": venue.get("lng", 0.0),
             "rating": venue.get("rating"),
-            "vibe_score": vibe_entry.get("vibe_score"),
+            "vibe_score": round(vibe_entry.get("vibe_score", 0.5), 2),
             "price_range": cost_entry.get("price_range"),
             "price_confidence": cost_entry.get("confidence", "none"),
             "why": explanation.get("why", ""),
-            "watch_out": explanation.get("watch_out", ""),
+            "watch_out": watch_out,
             "historical_vetoes": venue.get("historical_risks", []),
+            "has_historical_risk": has_hist
         }
         ranked_results.append(result)
-        logger.info("[SYNTH] #%d %s", rank, result["name"])
+        logger.info("[SYNTH] #%d %s (Vibe Penalty Applied: %s)", rank, result["name"], has_hist)
 
     # Step 5: Generate Global Consensus
     logger.info("[SYNTH] Writing comparative summary...")
     try:
-        consensus_text, email_draft = asyncio.run(_generate_global_consensus(top_venues, raw_prompt))
-    except RuntimeError:
-        import nest_asyncio
-        nest_asyncio.apply()
-        consensus_text, email_draft = asyncio.run(_generate_global_consensus(top_venues, raw_prompt))
+        consensus_text, email_draft = await _generate_global_consensus(top_venues, raw_prompt)
+    except Exception as exc:
+        logger.warning("[SYNTH] Global consensus failed: %s", exc)
+        consensus_text, email_draft = "Based on the options, these venues are the strongest matches.", ""
 
     action_request = None
     if requires_oauth and "send_email" in allowed_actions:

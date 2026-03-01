@@ -19,7 +19,7 @@ from app.services.snowflake import SnowflakeIntelligence
 logger = logging.getLogger(__name__)
 
 
-def critic_node(state: PathfinderState) -> PathfinderState:
+async def critic_node(state: PathfinderState) -> PathfinderState:
     """
     Cross-reference top venues with real-world risks.
 
@@ -127,16 +127,14 @@ def critic_node(state: PathfinderState) -> PathfinderState:
             logger.error("[CRITIC] Gemini call failed for %s: %s", venue_id, e)
             return venue_id, {"risks": [], "fast_fail": False, "fast_fail_reason": None}, {}
 
-    async def _run_all():
-        return await asyncio.gather(*[_analyze_venue(v) for v in top_candidates])
 
-    # Run analysis for all top candidates
+
+    # Run analysis for all top candidates concurrently
     try:
-        results = asyncio.run(_run_all())
-    except RuntimeError:
-        import nest_asyncio
-        nest_asyncio.apply()
-        results = asyncio.run(_run_all())
+        results = await asyncio.gather(*[_analyze_venue(v) for v in top_candidates])
+    except Exception as e:
+        logger.error("[CRITIC] Batch analysis failed: %s", e)
+        results = []
 
     overall_fast_fail = False
     fast_fail_reason = None
@@ -147,11 +145,7 @@ def critic_node(state: PathfinderState) -> PathfinderState:
             # Instead of halting the graph, log to Snowflake
             fast_fail_reason = analysis.get("fast_fail_reason")
             try:
-                sf = SnowflakeIntelligence(
-                    user=os.getenv('SNOWFLAKE_USER'),
-                    password=os.getenv('SNOWFLAKE_PASSWORD'),
-                    account=os.getenv('SNOWFLAKE_ACCOUNT')
-                )
+                sf = SnowflakeIntelligence()
                 venue_name = next((v.get("name") for v in top_candidates if v.get("venue_id", v.get("name")) == venue_id), venue_id)
                 sf.log_risk_event(venue_name, venue_id, fast_fail_reason, str(weather))
                 logger.info("[CRITIC] Logged veto to Snowflake for %s", venue_name)

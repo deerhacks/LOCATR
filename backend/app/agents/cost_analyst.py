@@ -98,7 +98,7 @@ def _analyze_venue_cost(venue: dict) -> dict:
         "value_score": _calculate_value_score(resolved_price, confidence)
     }
 
-def cost_analyst_node(state: PathfinderState) -> PathfinderState:
+async def cost_analyst_node(state: PathfinderState) -> PathfinderState:
     """
     Compute price normalization per venue.
     """

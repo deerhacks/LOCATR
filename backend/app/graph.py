@@ -38,7 +38,7 @@ async def parallel_analysts_node(state: PathfinderState) -> PathfinderState:
     dispatched = []
     for name, func in agent_map.items():
         if not active or name in active:
-            tasks.append(asyncio.to_thread(func, state.copy()))
+            tasks.append(func(state.copy()))
             dispatched.append(name)
 
     logger.info("\n" + "═" * 60)

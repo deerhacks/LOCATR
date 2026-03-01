@@ -96,7 +96,7 @@ async def _score_venue(venue: dict, vibe_preference: str) -> dict | None:
         return None
 
 
-def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
+async def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
     """
     Score each candidate venue on subjective vibe / aesthetic match.
 
@@ -118,10 +118,8 @@ def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
         return {"vibe_scores": {}}
 
     # Score all venues concurrently
-    async def _score_all():
-        return await asyncio.gather(*[_score_venue(v, vibe_pref) for v in candidates])
     try:
-        results = asyncio.run(_score_all())
+        results = await asyncio.gather(*[_score_venue(v, vibe_pref) for v in candidates])
     except Exception as exc:
         logger.error("[VIBE] Batch scoring failed: %s", exc)
         results = [None] * len(candidates)

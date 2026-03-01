@@ -495,11 +495,25 @@ function VenueCard({ venue, rankIdx, isSelected, onSelect }) {
           fontWeight: 400,
           fontSize: 13,
           letterSpacing: '0.01em',
-          color: '#e0a060',
-          marginTop: 5,
-          paddingLeft: 32,
+          color: venue.has_historical_risk ? '#ff4d4d' : '#e0a060',
+          marginTop: 8,
+          padding: venue.has_historical_risk ? '8px 12px' : '0 0 0 32px',
+          background: venue.has_historical_risk ? 'rgba(255, 77, 77, 0.1)' : 'transparent',
+          borderLeft: venue.has_historical_risk ? '3px solid #ff4d4d' : 'none',
+          borderRadius: venue.has_historical_risk ? 4 : 0,
         }}>
-          ⚠ {venue.watch_out}
+          <div style={{
+            fontFamily: MONO,
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: '0.1em',
+            marginBottom: 4,
+            color: venue.has_historical_risk ? '#ff4d4d' : '#e0a060',
+            textTransform: 'uppercase'
+          }}>
+            {venue.has_historical_risk ? '⚠️ SAFETY VETO' : 'Watch Out'}
+          </div>
+          {venue.watch_out}
         </div>
       )}
     </div>

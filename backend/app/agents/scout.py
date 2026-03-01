@@ -64,7 +64,7 @@ def _deduplicate(venues: list[dict], threshold_m: float = 100) -> list[dict]:
     return kept
 
 
-def scout_node(state: PathfinderState) -> PathfinderState:
+async def scout_node(state: PathfinderState) -> PathfinderState:
     """
     Discover 5-10 candidate venues.
 
@@ -90,16 +90,13 @@ def scout_node(state: PathfinderState) -> PathfinderState:
         logger.warning("[SCOUT] No query to search — returning empty")
         return {"candidate_venues": []}
 
-    # Run both APIs concurrently
-    async def _fetch():
-        return await asyncio.gather(
+    # Run both APIs concurrently - using native await instead of asyncio.run
+    logger.info("[SCOUT] Querying Google Places + Yelp simultaneously...")
+    try:
+        google_results, yelp_results = await asyncio.gather(
             search_places(query=query, location=location, max_results=8),
             search_yelp(term=query, location=location, max_results=8),
         )
-
-    logger.info("[SCOUT] Querying Google Places + Yelp simultaneously...")
-    try:
-        google_results, yelp_results = asyncio.run(_fetch())
     except Exception as exc:
         logger.error("[SCOUT] API calls failed: %s", exc)
         google_results, yelp_results = [], []
@@ -118,20 +115,24 @@ def scout_node(state: PathfinderState) -> PathfinderState:
     # Cap at 10
     candidates = unique_venues[:10]
     
-    # ── Inject Historical Risks ──
+    # ── Inject Historical Risks (OPTIMIZED BATCH CALL) ──
     try:
-        sf = SnowflakeIntelligence(
-            user=os.getenv('SNOWFLAKE_USER'),
-            password=os.getenv('SNOWFLAKE_PASSWORD'),
-            account=os.getenv('SNOWFLAKE_ACCOUNT')
-        )
+        sf = SnowflakeIntelligence()
+        # Fetch all risks in one single query
+        all_risks = sf.get_batch_historical_risks(candidates)
+        
         for cand in candidates:
-            c_vid = cand.get("venue_id", cand.get("name", "unknown"))
-            c_name = cand.get("name")
-            past_risks = sf.get_historical_risks(c_vid, c_name)
-            if past_risks:
-                logger.info("[SCOUT] Found %d historical risks for %s", len(past_risks), c_name)
-            cand["historical_risks"] = past_risks
+            # Check by both ID and Name
+            vid = cand.get("venue_id", "").lower()
+            vname = cand.get("name", "").lower()
+            
+            cand_risks = all_risks.get(vid, [])
+            if not cand_risks and vname:
+                cand_risks = all_risks.get(vname, [])
+                
+            cand["historical_risks"] = cand_risks
+            if cand_risks:
+                logger.info("[SCOUT] Found %d historical risks for %s", len(cand_risks), cand.get("name"))
     except Exception as exc:
         logger.error("[SCOUT] Failed to enrich historical risks: %s", exc)
         for cand in candidates:

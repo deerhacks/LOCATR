@@ -38,6 +38,7 @@ class PathfinderState(TypedDict, total=False):
     veto_reason: Optional[str]
     fast_fail: bool               # True if Critical early termination triggered (Condition A or B)
     fast_fail_reason: Optional[str]
+    has_historical_risk: bool     # True if any result has a Snowflake risk flag
 
     # ── Final ranked output ──
     ranked_results: List[dict]

@@ -237,10 +237,10 @@ async def vibe_heatmap(vibe_index: int):
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"vibe_index must be 0-{len(VIBE_LABELS)-1}")
 
-    from app.services.snowflake import _get_connection
+    from app.services.snowflake import get_snowflake_connection
     import json as _json
 
-    conn = _get_connection()
+    conn = get_snowflake_connection()
     if not conn:
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Snowflake unavailable")

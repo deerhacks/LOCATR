@@ -120,16 +120,21 @@ The Auth0 implementation now genuinely works end-to-end. We proved the Token Vau
 
 ---
 
-# Phase 3: Frontend Success Notification
+# Phase 4: Historical Veto Integration
 
-## UI Updates (`Sidebar.js`)
-- [x] **Enhance `OAuthConsentModal`**:
-  - Update the React component to listen for `actionRequest.type === "oauth_success"`.
-  - Render a green "SUCCESS" UI state instead of the "Permission Required" prompt.
-  - Display the `actionRequest.reason` (e.g. "Authorized automatically via Push Notification. Email sent to contact@neocoffeebar.com.").
-- [x] **Auto-Dismissal**:
-  - Implement a `useEffect` hook that triggers `setTimeout`.
-  - Exactly 3.5 seconds after a success payload is received, execute the `onDismiss()` prop to automatically close the modal and return the user to the map results.
+## Backend (`state.py`, `synthesiser.py`)
+- [x] **State Extension**: Added `has_historical_risk: bool` to the core `PathfinderState`.
+- [x] **Vibe Penalty Logic**: Implemented a -0.5 vibe score penalty in the Synthesiser for any venue carrying a high-severity historical risk from Snowflake.
+- [x] **Memory Formatting**: Synthesiser now prepends `"MEMORY ALERT: ..."` to the `watch_out` strings for transparency.
 
-## Phase 3 Review Summary
-The frontend `OAuthConsentModal` now cleanly intercepts the `oauth_success` socket payload. Instead of rendering a permission button, it displays a green success confirmation detailing the automated action, and uses a `useEffect` timer to gracefully auto-dismiss the modal after 3.5 seconds, unblocking the UI without requiring any extra clicks.
+## Frontend (`Sidebar.js`, `MapComponent.js`)
+- [x] **Safety Veto UI**: Updated `Sidebar.js` to render a red-bordered, highlighted badge with a "⚠️ SAFETY VETO" header when the flag is present.
+- [x] **Red Pin Mapping**: Updated `MapComponent.js` to dynamic determine pin color. Vetoed venues now render as Red Pins with a subtle "pulsing" animation for maximum visibility.
+
+## Phase 4 Review Summary
+The Snowflake "Risk Memory" is now fully integrated into the user experience. Instead of just being a background data point, safety risks now actively lower a venue's ranking and trigger aggressive visual warnings in both the sidebar and on the map. This ensures users are immediately aware of past incidents like floods or security risks before making a choice.
+
+---
+
+# Verification Task
+- [ ] **Scotiabank Arena Test**: Run a search for "NBA Stadium" or "Scotiabank Arena" and verify the card turns Red and the map pin pulses Red.

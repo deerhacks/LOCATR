@@ -1,23 +1,36 @@
 import snowflake.connector
 import json
+import os
+from app.core.config import settings
 
-class SnowflakeIntelligence:
-    def __init__(self, user, password, account):
-        self.conn = snowflake.connector.connect(
-            user=user,
-            password=password,
-            account=account,
-            warehouse="PATHFINDER_WH",
-            database="PATHFINDER_DB",
-            schema="INTELLIGENCE",
+def get_snowflake_connection():
+    """Helper to get a raw connection to Snowflake using centralized settings."""
+    try:
+        # Use settings object which correctly loads from .env via Pydantic
+        return snowflake.connector.connect(
+            user=settings.SNOWFLAKE_USER,
+            password=settings.SNOWFLAKE_PASSWORD,
+            account=settings.SNOWFLAKE_ACCOUNT,
+            warehouse=settings.SNOWFLAKE_WAREHOUSE or 'COMPUTE_WH',
+            database=settings.SNOWFLAKE_DATABASE or 'PATHFINDER_DB',
+            schema=settings.SNOWFLAKE_SCHEMA or 'INTELLIGENCE',
+            role=settings.SNOWFLAKE_ROLE or 'ACCOUNTADMIN',
             autocommit=True
         )
+    except Exception as e:
+        print(f"❌ Snowflake connection error: {e}")
+        return None
+
+class SnowflakeIntelligence:
+    def __init__(self, user=None, password=None, account=None):
+        # Prefer provided args, fallback to global settings
+        self.conn = get_snowflake_connection()
 
     def get_historical_risks(self, venue_id, venue_name):
         query = """
         SELECT RISK_DESCRIPTION
         FROM VENUE_RISK_EVENTS
-        WHERE VENUE_ID = %s OR VENUE_NAME = %s
+        WHERE VENUE_ID = %s OR VENUE_NAME ILIKE %s
         ORDER BY VETO_TIMESTAMP DESC
         """
         with self.conn.cursor() as cur:
@@ -36,6 +49,54 @@ class SnowflakeIntelligence:
             except Exception as e:
                 print(f"❌ Snowflake error fetching historical risks for {venue_name}: {e}")
                 return []
+
+    def get_batch_historical_risks(self, venues):
+        """
+        Fetch risks for multiple venues in a single query.
+        'venues' should be a list of dicts with 'venue_id' and 'name'.
+        Returns a dict mapping venue_id/name to list of risk strings.
+        """
+        if not venues:
+            return {}
+
+        # Prepare IDs and Names for the IN clause
+        ids = [v.get("venue_id") for v in venues if v.get("venue_id")]
+        names = [v.get("name") for v in venues if v.get("name")]
+        
+        # Build query with placeholders
+        id_placeholders = ",".join(["%s"] * len(ids)) if ids else "NULL"
+        name_placeholders = ",".join(["%s"] * len(names)) if names else "NULL"
+        
+        query = f"""
+        SELECT VENUE_ID, VENUE_NAME, RISK_DESCRIPTION
+        FROM VENUE_RISK_EVENTS
+        WHERE VENUE_ID IN ({id_placeholders}) 
+           OR VENUE_NAME IN ({name_placeholders})
+        ORDER BY VETO_TIMESTAMP DESC
+        """
+        
+        params = ids + names
+        batch_results = {}
+        
+        with self.conn.cursor() as cur:
+            try:
+                cur.execute(query, params)
+                rows = cur.fetchall()
+                for v_id_row, v_name_row, desc in rows:
+                    # Key by both ID and Name to make lookup easy for Scout
+                    key_id = v_id_row.lower() if v_id_row else None
+                    key_name = v_name_row.lower() if v_name_row else None
+                    
+                    if key_id:
+                        if key_id not in batch_results: batch_results[key_id] = []
+                        if desc not in batch_results[key_id]: batch_results[key_id].append(desc)
+                    if key_name:
+                        if key_name not in batch_results: batch_results[key_name] = []
+                        if desc not in batch_results[key_name]: batch_results[key_name].append(desc)
+                return batch_results
+            except Exception as e:
+                print(f"❌ Snowflake batch error: {e}")
+                return {}
 
     def log_risk_event(self, venue_name, venue_id, description, weather):
         import uuid
