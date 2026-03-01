@@ -261,6 +261,7 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
             "price_confidence": cost_entry.get("confidence", "none"),
             "why": explanation.get("why", ""),
             "watch_out": explanation.get("watch_out", ""),
+            "historical_vetoes": venue.get("historical_risks", []),
         }
         ranked_results.append(result)
         logger.info("[SYNTH] #%d %s", rank, result["name"])
