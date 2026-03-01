@@ -210,12 +210,12 @@ export default function Home() {
               <span style={{ fontFamily: MONO, fontSize: 13, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.55)' }}>
                 {user.nickname || user.name}
               </span>
-              <a href="/api/auth/logout" className="cta" style={{ padding: '6px 16px 5px', fontSize: 10 }}>
+              <a href="/api/auth/logout" className="cta" style={{ padding: '6px 16px 5px', fontSize: 13 }}>
                 LOGOUT
               </a>
             </>
           ) : (
-            <a href="/api/auth/login" className="cta">
+            <a href="/api/auth/login" className="cta" style={{ fontSize: 13 }}>
               LOG IN
             </a>
           )}
@@ -230,7 +230,7 @@ export default function Home() {
       }}>
 
         <div className="land-1" style={{ marginBottom: 28 }}>
-          <CrosshairIcon size={50} color="rgba(255,255,255,0.22)" />
+          <CrosshairIcon size={50} color="rgba(255,255,255,0.50)" />
         </div>
 
         <div className="land-2" style={{ marginBottom: 14 }}>
@@ -251,14 +251,16 @@ export default function Home() {
             color: 'rgba(255,255,255,0.35)',
             margin: 0, textAlign: 'center',
           }}>
-            {user ? `Welcome back, ${user.nickname || user.name?.split(' ')[0]}.` : 'Find your perfect venue.'}
+            {user ? `Welcome back, ${user.given_name || user.name}.` : 'Find your perfect venue.'}
           </p>
         </div>
 
         <div className="land-4" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <Link href="/map" className="cta">Get Started</Link>
+          {user && (
+            <Link href="/map" className="cta">Get Started</Link>
+          )}
           {!user && !isLoading && (
-            <a href="/api/auth/login?returnTo=/map" className="cta" style={{ background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.50)' }}>
+            <a href="/api/auth/login?returnTo=/map" className="cta" style={{ background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.08)', fontSize: 14, color: 'rgba(255,255,255,0.50)' }}>
               Sign In for Personalization
             </a>
           )}
