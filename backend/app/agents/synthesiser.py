@@ -11,6 +11,7 @@ After all analysts and the Critic have run, the Synthesiser:
 import asyncio
 import json
 import logging
+import time
 
 from app.models.state import PathfinderState
 from app.services.gemini import generate_content
@@ -277,12 +278,119 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
 
     action_request = None
     if requires_oauth and "send_email" in allowed_actions:
+        # Default action_request for frontend consent modal
         action_request = {
             "type": "oauth_consent",
             "reason": f"To automatically email {top_venues[0][1].get('name', 'the top venue')} for availability.",
             "scopes": ["email.send"],
             "draft": email_draft
         }
+
+        # ── Advanced Auth0 CIBA Flow ──
+        # If the user is truly authenticated via Auth0 (not local test), push a notification to their phone
+        auth_user_id = state.get("auth_user_id")
+        if auth_user_id and auth_user_id != "auth0|local_test":
+            logger.info("[SYNTH] Found authenticated user %s. Attempting CIBA push notification...", auth_user_id)
+            from app.services.auth0 import auth0_service
+            
+            # Step 1: Trigger CIBA Push Notification
+            try:
+                msg = f"LOCATR: Allow sending an email to {top_venues[0][1].get('name')}?"
+                auth_req_id = asyncio.run(auth0_service.trigger_ciba_auth(auth_user_id, msg))
+            except RuntimeError:
+                import nest_asyncio
+                nest_asyncio.apply()
+                auth_req_id = asyncio.run(auth0_service.trigger_ciba_auth(auth_user_id, msg))
+            except Exception as e:
+                logger.error("[SYNTH] Failed to trigger CIBA: %s", e)
+                auth_req_id = None
+
+            # Step 2: Poll for Approval
+            if auth_req_id:
+                logger.info("[SYNTH] CIBA Push sent. Waiting for user approval on phone (timeout 30s)...")
+                max_retries = 15
+                delay = 2.0
+                approved = False
+
+                for i in range(max_retries):
+                    try:
+                        status_res = asyncio.run(auth0_service.poll_ciba_status(auth_req_id))
+                    except RuntimeError:
+                        import nest_asyncio
+                        nest_asyncio.apply()
+                        status_res = asyncio.run(auth0_service.poll_ciba_status(auth_req_id))
+                    
+                    status = status_res.get("status")
+
+                    if status == "approved":
+                        logger.info("[SYNTH] CIBA Authorized! User approved on device.")
+                        approved = True
+                        break
+                    elif status == "rejected":
+                        logger.warning("[SYNTH] CIBA Rejected by user on device.")
+                        break
+                    elif status == "error":
+                        logger.error("[SYNTH] CIBA Error: %s", status_res.get("detail"))
+                        break
+                    
+                    # status == "pending"
+                    logger.debug("[SYNTH] Poll %d/%d: Still waiting for approval...", i+1, max_retries)
+                    time.sleep(delay)
+                
+                if not approved:
+                    logger.warning("[SYNTH] CIBA request timed out or was rejected. Falling back to manual browser consent.")
+                else:
+                    # Step 3: Retrieve IDP Token from Token Vault
+                    logger.info("[SYNTH] Executing Token Vault IDP Extraction...")
+                    try:
+                        idp_token = asyncio.run(auth0_service.get_idp_token(auth_user_id, "google-oauth2"))
+                    except RuntimeError:
+                        import nest_asyncio
+                        nest_asyncio.apply()
+                        idp_token = asyncio.run(auth0_service.get_idp_token(auth_user_id, "google-oauth2"))
+                    
+                    if idp_token:
+                        logger.info("[SYNTH] ── SUCCESS ── Retrieved Google token! Executing Gmail API send...")
+                        
+                        try:
+                            recipient_email = "ryannqii17@gmail.com"
+                            venue_name = top_venues[0][1].get('name', 'Venue')
+                            subject = f"Inquiry: Group Booking at {venue_name}"
+                            
+                            # Fire actual email payload
+                            email_sent = asyncio.run(auth0_service.send_gmail_message(
+                                idp_token, 
+                                recipient_email, 
+                                subject, 
+                                email_draft
+                            ))
+                        except RuntimeError:
+                            import nest_asyncio
+                            nest_asyncio.apply()
+                            email_sent = asyncio.run(auth0_service.send_gmail_message(
+                                idp_token, 
+                                recipient_email, 
+                                subject, 
+                                email_draft
+                            ))
+
+                        if email_sent:
+                            logger.info("[SYNTH] Email successfully dispatched to %s", recipient_email)
+                            action_request = {
+                                "type": "oauth_success",
+                                "reason": f"Authorized automatically via Push Notification. Email sent to {recipient_email}.",
+                                "draft": email_draft,
+                                "simulated_send": True
+                            }
+                        else:
+                            logger.warning("[SYNTH] Failed to dispatch email via Gmail API.")
+                            action_request = {
+                                "type": "oauth_error",
+                                "reason": "Failed to send the email despite retrieving token.",
+                                "draft": email_draft
+                            }
+                    else:
+                        logger.warning("[SYNTH] Approved, but failed to extract Google Identity Token from vault.")
 
     logger.info("[SYNTH] Done — %d venues ranked", len(scored))
 
