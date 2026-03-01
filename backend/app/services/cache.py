@@ -1,41 +1,32 @@
-"""
-Redis caching service (optional enhancement).
-Caches Google Places / Yelp results for popular queries.
-"""
+import time
+from typing import Any, Optional, Dict
 
-import json
-from typing import Optional
-from app.core.config import settings
+class SimpleTTLCache:
+    """
+    A lightweight in-memory cache with Time-To-Live (TTL).
+    Useful for hackathon/demo apps to avoid redundant slow API calls.
+    """
+    def __init__(self, default_ttl: int = 300): # 5 minutes default
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self.default_ttl = default_ttl
 
-
-class CacheService:
-    """Simple Redis wrapper for query result caching."""
-
-    def __init__(self):
-        self._client = None
-
-    @property
-    def client(self):
-        if self._client is None:
-            try:
-                import redis
-                self._client = redis.from_url(settings.REDIS_URL)
-            except Exception:
-                self._client = None
-        return self._client
-
-    def get(self, key: str) -> Optional[dict]:
-        """Retrieve cached JSON by key."""
-        if not self.client:
+    def get(self, key: str) -> Optional[Any]:
+        if key not in self._cache:
             return None
-        raw = self.client.get(key)
-        return json.loads(raw) if raw else None
+        
+        entry = self._cache[key]
+        if time.time() > entry["expires"]:
+            del self._cache[key]
+            return None
+            
+        return entry["value"]
 
-    def set(self, key: str, value: dict, ttl: int = 3600):
-        """Cache a JSON value with TTL (default 1 hour)."""
-        if not self.client:
-            return
-        self.client.setex(key, ttl, json.dumps(value))
+    def set(self, key: str, value: Any, ttl: Optional[int] = None):
+        ttl = ttl if ttl is not None else self.default_ttl
+        self._cache[key] = {
+            "value": value,
+            "expires": time.time() + ttl
+        }
 
-
-cache_service = CacheService()
+# Global cache instance
+search_cache = SimpleTTLCache()
