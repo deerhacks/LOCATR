@@ -8,25 +8,25 @@ const BODY = "'Inter', -apple-system, 'Segoe UI', sans-serif"
 // ── Shared constants ──────────────────────────────────────
 
 const AGENT_COLORS = {
-  commander:    '#6ee06e',
-  scout:        '#c8c060',
+  commander: '#6ee06e',
+  scout: '#c8c060',
   vibe_matcher: '#b06ee0',
   cost_analyst: '#60a8e0',
-  critic:       '#60e0c8',
-  synthesiser:  '#e0a060',
-  graph:        '#888888',
-  system:       '#888888',
+  critic: '#60e0c8',
+  synthesiser: '#e0a060',
+  graph: '#888888',
+  system: '#888888',
 }
 
 const AGENT_LABELS = {
-  commander:    'COMMANDER',
-  scout:        'SCOUT',
+  commander: 'COMMANDER',
+  scout: 'SCOUT',
   vibe_matcher: 'VIBE MATCHER',
   cost_analyst: 'COST ANALYST',
-  critic:       'CRITIC',
-  synthesiser:  'SYNTHESISER',
-  graph:        'GRAPH',
-  system:       'SYSTEM',
+  critic: 'CRITIC',
+  synthesiser: 'SYNTHESISER',
+  graph: 'GRAPH',
+  system: 'SYSTEM',
 }
 
 const RANK_COLORS = ['#e8c84a', '#b0b8c4', '#c8905a', 'rgba(255,255,255,0.55)']
@@ -40,10 +40,10 @@ function stripPrefix(msg) {
 // Helper to parse **text** into JSX
 function formatBoldText(text) {
   if (!text) return null;
-  
+
   // Split by **text** and keep the delimiters in the array
   const parts = text.split(/(\*\*.*?\*\*)/g);
-  
+
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
       // Remove the stars and wrap in bold tag
@@ -553,6 +553,8 @@ function OAuthConsentModal({ actionRequest, onDismiss }) {
     'calendar.write': 'Create calendar events',
   }
 
+  const isSuccess = actionRequest.type === 'oauth_success'
+
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 100,
@@ -562,19 +564,28 @@ function OAuthConsentModal({ actionRequest, onDismiss }) {
     }}>
       <div style={{
         background: '#1a1814',
-        border: '1px solid rgba(255,255,255,0.10)',
+        border: isSuccess ? '1px solid rgba(110,224,110,0.30)' : '1px solid rgba(255,255,255,0.10)',
         borderRadius: 12,
         padding: '28px 32px',
         maxWidth: 420,
         width: '90vw',
       }}>
-        <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.88)', textTransform: 'uppercase', marginBottom: 12 }}>
-          Permission Required
+        <div style={{
+          fontFamily: MONO,
+          fontSize: 13,
+          letterSpacing: '0.22em',
+          color: isSuccess ? '#6ee06e' : 'rgba(255,255,255,0.88)',
+          textTransform: 'uppercase',
+          marginBottom: 12
+        }}>
+          {isSuccess ? 'SUCCESS' : 'Permission Required'}
         </div>
+
         <div style={{ fontFamily: BODY, fontSize: 14, color: 'rgba(255,255,255,0.60)', lineHeight: 1.55, marginBottom: 16 }}>
           {actionRequest.reason || 'LOCATR needs additional permissions to complete this action.'}
         </div>
-        {actionRequest.scopes?.length > 0 && (
+
+        {!isSuccess && actionRequest.scopes?.length > 0 && (
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.16em', color: 'rgba(255,255,255,0.35)', marginBottom: 8 }}>REQUESTED SCOPES</div>
             {actionRequest.scopes.map((scope, i) => (
@@ -587,32 +598,54 @@ function OAuthConsentModal({ actionRequest, onDismiss }) {
             ))}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10 }}>
-          <a
-            href={`/api/auth/login?scope=openid profile email${actionRequest.scopes?.map(s => ' ' + s).join('') ?? ''}`}
-            style={{
-              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              padding: '9px 0 8px',
-              borderRadius: 7, background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)',
-              fontFamily: MONO, fontSize: 12, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.88)',
-              textTransform: 'uppercase', textDecoration: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            Allow
-          </a>
-          <button
-            onClick={onDismiss}
-            style={{
-              flex: 1, padding: '9px 0 8px',
-              borderRadius: 7, background: 'transparent', border: '1px solid rgba(255,255,255,0.08)',
-              fontFamily: MONO, fontSize: 12, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.35)',
-              textTransform: 'uppercase', cursor: 'pointer',
-            }}
-          >
-            Deny
-          </button>
-        </div>
+
+        {isSuccess && (
+          <div style={{ display: 'flex', marginTop: 10 }}>
+            <button
+              onClick={onDismiss}
+              style={{
+                flex: 1, padding: '10px 0 9px',
+                borderRadius: 7, background: 'rgba(110,224,110,0.10)', border: '1px solid rgba(110,224,110,0.25)',
+                fontFamily: MONO, fontSize: 12, letterSpacing: '0.22em', color: '#6ee06e',
+                textTransform: 'uppercase', cursor: 'pointer',
+                transition: 'background 0.2s ease',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(110,224,110,0.15)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'rgba(110,224,110,0.10)'}
+            >
+              Close
+            </button>
+          </div>
+        )}
+
+        {!isSuccess && (
+          <div style={{ display: 'flex', gap: 10 }}>
+            <a
+              href={`/api/auth/login?scope=openid profile email${actionRequest.scopes?.map(s => ' ' + s).join('') ?? ''}`}
+              style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                padding: '9px 0 8px',
+                borderRadius: 7, background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)',
+                fontFamily: MONO, fontSize: 12, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.88)',
+                textTransform: 'uppercase', textDecoration: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Allow
+            </a>
+            <button
+              onClick={onDismiss}
+              style={{
+                flex: 1, padding: '9px 0 8px',
+                borderRadius: 7, background: 'transparent', border: '1px solid rgba(255,255,255,0.08)',
+                fontFamily: MONO, fontSize: 12, letterSpacing: '0.22em', color: 'rgba(255,255,255,0.35)',
+                textTransform: 'uppercase', cursor: 'pointer',
+              }}
+            >
+              Deny
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -893,8 +926,8 @@ export default function Sidebar({
           pointerEvents: 'none',
         }}>
           <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-            <path d="M4.5 3L1 7L4.5 11" stroke="rgba(255,255,255,0.45)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M9.5 3L13 7L9.5 11" stroke="rgba(255,255,255,0.45)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M4.5 3L1 7L4.5 11" stroke="rgba(255,255,255,0.45)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M9.5 3L13 7L9.5 11" stroke="rgba(255,255,255,0.45)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </div>
       </div>
