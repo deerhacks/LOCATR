@@ -1,6 +1,6 @@
-# PATHFINDER
+# LOCATR
 
-Intelligent, vibe-aware group activity and venue planning with predictive risk analysis and spatial visualization.
+Intelligent activity planning. Find your perfect venue.
 
 ## Quick Start
 
