@@ -2,8 +2,10 @@
 PATHFINDER API routes.
 """
 
+import asyncio
 import io
 import logging
+import queue
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -11,6 +13,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 from app.schemas import PlanRequest, PlanResponse
+from app.core.ws_log_handler import WebSocketLogHandler
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -66,6 +69,29 @@ async def create_plan(request: PlanRequest):
 async def websocket_plan(websocket: WebSocket):
     from app.graph import pathfinder_graph
     await websocket.accept()
+
+    log_queue: queue.Queue = queue.Queue()
+    handler = WebSocketLogHandler(log_queue)
+    handler.setLevel(logging.DEBUG)
+
+    # Attach handler to all agent / graph loggers
+    # Must attach to each child logger directly because parent loggers
+    # created on-the-fly may not propagate reliably.
+    target_logger_names = [
+        "app.agents.commander",
+        "app.agents.scout",
+        "app.agents.vibe_matcher",
+        "app.agents.cost_analyst",
+        "app.agents.critic",
+        "app.agents.synthesiser",
+        "app.graph",
+    ]
+    target_loggers = [logging.getLogger(name) for name in target_logger_names]
+    for lg in target_loggers:
+        lg.addHandler(handler)
+        if lg.level == logging.NOTSET or lg.level > logging.DEBUG:
+            lg.setLevel(logging.DEBUG)
+
     try:
         data = await websocket.receive_json()
         initial_state = {
@@ -82,35 +108,71 @@ async def websocket_plan(websocket: WebSocket):
             "veto_reason": None,
             "ranked_results": [],
             "member_locations": data.get("member_locations", []),
-            "retry_count": 0,
         }
-        NODE_LABELS = {
-            "commander": "Parsing your request...",
-            "scout": "Discovering venues...",
-            "vibe_matcher": "Analyzing vibes...",
-            "cost_analyst": "Calculating costs...",
-            "critic": "Running risk assessment...",
-            "synthesiser": "Ranking results...",
-        }
-        accumulated = {**initial_state}
-        async for event in pathfinder_graph.astream(initial_state):
-            node_name = list(event.keys())[0]
-            accumulated.update(event[node_name])
+
+        done_event = asyncio.Event()
+        graph_result = {}
+        graph_error = None
+
+        async def run_graph():
+            nonlocal graph_result, graph_error
+            try:
+                graph_result = await pathfinder_graph.ainvoke(initial_state)
+            except Exception as exc:
+                logger.exception("Graph execution failed: %s", exc)
+                graph_error = exc
+            finally:
+                done_event.set()
+
+        graph_task = asyncio.create_task(run_graph())
+
+        # Drain the log queue and send each entry over the WebSocket
+        while not done_event.is_set() or not log_queue.empty():
+            try:
+                entry = log_queue.get_nowait()
+                await websocket.send_json({
+                    "type": "log",
+                    "node": entry["node"],
+                    "message": entry["message"],
+                })
+            except queue.Empty:
+                if done_event.is_set():
+                    break
+                await asyncio.sleep(0.05)
+
+        await graph_task
+
+        # Flush any remaining log entries queued during final moments
+        while not log_queue.empty():
+            try:
+                entry = log_queue.get_nowait()
+                await websocket.send_json({
+                    "type": "log",
+                    "node": entry["node"],
+                    "message": entry["message"],
+                })
+            except queue.Empty:
+                break
+
+        if graph_error:
             await websocket.send_json({
-                "type": "progress",
-                "node": node_name,
-                "label": NODE_LABELS.get(node_name, node_name),
+                "type": "error",
+                "message": str(graph_error),
             })
-        await websocket.send_json({
-            "type": "result",
-            "data": PlanResponse(
-                venues=accumulated.get("ranked_results", []),
-                execution_summary="Pipeline complete.",
-            ).model_dump(),
-        })
+        else:
+            await websocket.send_json({
+                "type": "result",
+                "data": PlanResponse(
+                    venues=graph_result.get("ranked_results", []),
+                    execution_summary="Pipeline complete.",
+                    global_consensus=graph_result.get("global_consensus"),
+                ).model_dump(),
+            })
     except WebSocketDisconnect:
         pass
     finally:
+        for lg in target_loggers:
+            lg.removeHandler(handler)
         try:
             await websocket.close()
         except Exception:

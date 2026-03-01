@@ -39,7 +39,9 @@ class VenueResult(BaseModel):
     lat: float
     lng: float
     vibe_score: Optional[float] = None
-    cost_profile: Optional[dict] = None
+    rating: Optional[float] = None
+    price_range: Optional[str] = None
+    price_confidence: Optional[str] = None
     why: str = ""
     watch_out: str = ""
 
@@ -49,3 +51,4 @@ class PlanResponse(BaseModel):
 
     venues: List[VenueResult]
     execution_summary: Optional[str] = None
+    global_consensus: Optional[str] = None
