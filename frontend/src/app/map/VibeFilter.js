@@ -61,8 +61,8 @@ export default function VibeFilter({ onVibeSelect, selectedVibe }) {
         onClick={() => setOpen(v => !v)}
         title={isActive ? `Vibe: ${selectedVibe.name}` : 'Filter by vibe'}
         style={{
-          width: 40,
-          height: 40,
+          width: 42,
+          height: 42,
           borderRadius: 10,
           display: 'flex',
           alignItems: 'center',
@@ -134,7 +134,7 @@ export default function VibeFilter({ onVibeSelect, selectedVibe }) {
           <div style={{
             padding: '2px 6px 6px',
             fontFamily: MONO,
-            fontSize: 10,
+            fontSize: 12,
             letterSpacing: '0.22em',
             color: 'rgba(255,255,255,0.25)',
             textTransform: 'uppercase',

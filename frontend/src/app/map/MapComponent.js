@@ -174,7 +174,7 @@ export default function MapComponent() {
         .addTo(mapRef.current)
       el.addEventListener('click', () => {
         setSelectedVenueIdx(i)
-        mapRef.current.flyTo({ center: [venue.lng, venue.lat], zoom: 15, duration: 900 })
+        mapRef.current.flyTo({ center: [venue.lng, venue.lat], zoom: 17, duration: 900 })
       })
       markersRef.current.push(marker)
     })
@@ -575,7 +575,7 @@ export default function MapComponent() {
             setSelectedVenueIdx(i);
             const v = results?.venues[i];
             if (v) {
-              mapRef.current?.flyTo({ center: [v.lng, v.lat], zoom: 15, duration: 900 });
+              mapRef.current?.flyTo({ center: [v.lng, v.lat], zoom: 17, duration: 900 });
             }
           }}
           onNewSearch={handleNewSearch}
