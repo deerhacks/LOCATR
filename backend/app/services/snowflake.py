@@ -1,178 +1,126 @@
-"""
-Snowflake memory service — log and retrieve historical risk data.
-"""
+import snowflake.connector
+import json
 
-import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-
-from app.core.config import settings
-
-logger = logging.getLogger(__name__)
-
-
-def _get_connection():
-    """Create a Snowflake connection using settings."""
-    try:
-        import snowflake.connector
-        return snowflake.connector.connect(
-            account=settings.SNOWFLAKE_ACCOUNT,
-            user=settings.SNOWFLAKE_USER,
-            password=settings.SNOWFLAKE_PASSWORD,
-            database=settings.SNOWFLAKE_DATABASE,
-            schema=settings.SNOWFLAKE_SCHEMA,
-            warehouse=settings.SNOWFLAKE_WAREHOUSE,
-            role=settings.SNOWFLAKE_ROLE,
+class SnowflakeIntelligence:
+    def __init__(self, user, password, account):
+        self.conn = snowflake.connector.connect(
+            user=user,
+            password=password,
+            account=account,
+            warehouse="PATHFINDER_WH",
+            database="PATHFINDER_DB",
+            schema="INTELLIGENCE",
+            autocommit=True
         )
-    except Exception as e:
-        logger.error(f"Snowflake connection failed: {e}")
-        return None
+
+    def get_historical_risks(self, venue_id, venue_name):
+        query = """
+        SELECT RISK_DESCRIPTION
+        FROM VENUE_RISK_EVENTS
+        WHERE VENUE_ID = %s OR VENUE_NAME = %s
+        ORDER BY VETO_TIMESTAMP DESC
+        """
+        with self.conn.cursor() as cur:
+            try:
+                cur.execute(query, (venue_id, venue_name))
+                results = cur.fetchall()
+                # Deduplicate exact strings in Python while preserving order
+                seen = set()
+                risks = []
+                for row in results:
+                    desc = row[0]
+                    if desc and desc not in seen:
+                        seen.add(desc)
+                        risks.append(desc)
+                return risks
+            except Exception as e:
+                print(f"❌ Snowflake error fetching historical risks for {venue_name}: {e}")
+                return []
+
+    def log_risk_event(self, venue_name, venue_id, description, weather):
+        import uuid
+        from datetime import datetime
+        
+        # 1. Prevent exact duplicates for this venue
+        check_query = """
+        SELECT 1 FROM VENUE_RISK_EVENTS
+        WHERE VENUE_ID = %s AND RISK_DESCRIPTION = %s
+        LIMIT 1
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(check_query, (venue_id, description))
+            if cur.fetchone() is not None:
+                print(f"✅ Duplicate risk ignored for {venue_name}: {description[:30]}...")
+                return
+
+        # 2. Insert new risk event
+        event_id = uuid.uuid4().hex
+        veto_timestamp = datetime.utcnow()
+        insert_query = """
+        INSERT INTO VENUE_RISK_EVENTS (EVENT_ID, VENUE_NAME, VENUE_ID, RISK_DESCRIPTION, WEATHER_CONTEXT, VETO_TIMESTAMP)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(insert_query, (event_id, venue_name, venue_id, description, str(weather), veto_timestamp))
+
+    def save_vibe_vector(self, venue_id, name, lat, lng, vector, primary_vibe):
+        # 1. Ensure 'vector' is a list of exactly 50 floats
+        if isinstance(vector, str):
+            vector = json.loads(vector)
+        if len(vector) != 50:
+            vector = (vector + [0.0] * 50)[:50]
+
+        # 2. Stringify as JSON to avoid parameter flattening
+        vector_json_str = json.dumps(vector)
+        
+        # 3. Use SELECT with explicit type casting to prevent 'Unsupported data type TEXT' errors
+        query = """
+        INSERT INTO CAFE_VIBE_VECTORS (VENUE_ID, NAME, LATITUDE, LONGITUDE, H3_INDEX, VIBE_VECTOR, PRIMARY_VIBE)
+        SELECT 
+            %s::VARCHAR, 
+            %s::VARCHAR, 
+            %s::FLOAT, 
+            %s::FLOAT, 
+            H3_LATLNG_TO_CELL(%s::FLOAT, %s::FLOAT, 8), 
+            PARSE_JSON(%s)::VECTOR(FLOAT, 50), 
+            %s::VARCHAR
+        """
+        
+        params = (venue_id, name, lat, lng, lat, lng, vector_json_str, primary_vibe)
+
+        with self.conn.cursor() as cur:
+            try:
+                cur.execute(query, params)
+            except Exception as e:
+                print(f"❌ Snowflake error for {name}: {e}")
 
 
-def ensure_tables():
-    """Create the risk_log table if it doesn't exist."""
-    conn = _get_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS risk_log (
-                id INTEGER AUTOINCREMENT PRIMARY KEY,
-                venue_id VARCHAR(200) NOT NULL,
-                venue_name VARCHAR(500),
-                risk_type VARCHAR(100) NOT NULL,
-                description TEXT NOT NULL,
-                severity VARCHAR(20) DEFAULT 'medium',
-                logged_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-                query_context TEXT
-            )
-        """)
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Failed to create risk_log table: {e}")
-        return False
-    finally:
-        conn.close()
+    # SEARCH: Find venues similar to a specific vibe
+    def find_similar_vibes(self, target_vector, limit=5):
+        query = """
+        SELECT NAME, PRIMARY_VIBE, VECTOR_L2_DISTANCE(VIBE_VECTOR, %s::VECTOR(FLOAT, 50)) as dist
+        FROM CAFE_VIBE_VECTORS
+        ORDER BY dist ASC
+        LIMIT %s
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (target_vector, limit))
+            return cur.fetchall()
 
-
-def log_risk(
-    venue_id: str,
-    risk_type: str,
-    description: str,
-    venue_name: Optional[str] = None,
-    severity: str = "medium",
-    query_context: Optional[str] = None,
-) -> bool:
+    def verify_population(self):
+        query = """
+        SELECT 
+            COUNT(*) as total_cafes,
+            COUNT(DISTINCT PRIMARY_VIBE) as unique_styles,
+            AVG(VECTOR_L2_NORM(VIBE_VECTOR)) as avg_vibe_intensity
+        FROM CAFE_VIBE_VECTORS
     """
-    Persist a risk event to Snowflake.
+        with self.conn.cursor() as cur:
+            cur.execute(query)
+            res = cur.fetchone()
+            print(f"--- 🚀 PATHFINDER DATA STATS ---")
+            print(f"Total Cafes Vectorized: {res[0]}")
+            print(f"Unique Aesthetic Styles: {res[1]}")
+            print(f"Average Vibe Intensity: {round(res[2], 2)}")
 
-    Args:
-        venue_id: Unique venue identifier.
-        risk_type: Category (e.g., "weather", "noise", "closure", "congestion").
-        description: Human-readable risk description.
-        venue_name: Optional venue display name.
-        severity: "low", "medium", or "high".
-        query_context: The original user query that triggered this risk.
-
-    Returns:
-        True if logged successfully, False otherwise.
-    """
-    conn = _get_connection()
-    if not conn:
-        logger.warning("Snowflake unavailable — risk not logged.")
-        return False
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO risk_log (venue_id, venue_name, risk_type, description, severity, query_context)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            (venue_id, venue_name, risk_type, description, severity, query_context),
-        )
-        conn.commit()
-        logger.info(f"Logged risk for {venue_id}: {risk_type}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to log risk: {e}")
-        return False
-    finally:
-        conn.close()
-
-
-def get_risks(
-    venue_id: Optional[str] = None,
-    risk_type: Optional[str] = None,
-    limit: int = 50,
-) -> List[Dict[str, Any]]:
-    """
-    Retrieve historical risks from Snowflake.
-
-    Args:
-        venue_id: Filter by venue (optional).
-        risk_type: Filter by risk type (optional).
-        limit: Max results to return.
-
-    Returns:
-        List of risk records as dicts.
-    """
-    conn = _get_connection()
-    if not conn:
-        return []
-
-    try:
-        cursor = conn.cursor()
-        query = "SELECT venue_id, venue_name, risk_type, description, severity, logged_at FROM risk_log"
-        params = []
-        conditions = []
-
-        if venue_id:
-            conditions.append("venue_id = %s")
-            params.append(venue_id)
-        if risk_type:
-            conditions.append("risk_type = %s")
-            params.append(risk_type)
-
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        query += " ORDER BY logged_at DESC LIMIT %s"
-        params.append(limit)
-
-        cursor.execute(query, params)
-        columns = [desc[0].lower() for desc in cursor.description]
-        rows = cursor.fetchall()
-
-        return [dict(zip(columns, row)) for row in rows]
-    except Exception as e:
-        logger.error(f"Failed to retrieve risks: {e}")
-        return []
-    finally:
-        conn.close()
-
-
-def get_venue_risk_summary(venue_id: str) -> Dict[str, Any]:
-    """
-    Get a summary of historical risks for a specific venue.
-    Useful for the Critic and Scout enrichment.
-    """
-    risks = get_risks(venue_id=venue_id)
-
-    if not risks:
-        return {"venue_id": venue_id, "total_risks": 0, "risks": []}
-
-    risk_counts = {}
-    for r in risks:
-        rtype = r.get("risk_type", "unknown")
-        risk_counts[rtype] = risk_counts.get(rtype, 0) + 1
-
-    return {
-        "venue_id": venue_id,
-        "total_risks": len(risks),
-        "risk_breakdown": risk_counts,
-        "most_recent": risks[0] if risks else None,
-        "risks": risks[:10],  # Return the 10 most recent
-    }
+# Call this at the very end of your main() function

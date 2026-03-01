@@ -1,38 +1,75 @@
-# Pricing Model Implementation Plan
+# Historical Snowflake Risks Integration Plan
 
-This plan outlines the steps to simplify the pricing architecture, transitioning from web scraping and Gemini-based cost computation to a fast, heuristic-based price signal normalizer.
+This plan outlines the steps to cross-check newly discovered venues against the Snowflake `VENUE_RISK_EVENTS` table to surface historical incidents to the frontend, and prevent duplicate logic when logging new events.
 
-## 1. Discovery APIs (Node 2: Scout)
-- [x] **Update `google_places.py`**: Add `places.priceLevel` to the `X-Goog-FieldMask`. Map the returned enum values (e.g., `PRICE_LEVEL_INEXPENSIVE`) or integers to `$`-`$$$$` and include `"price_range"` in the returned dict.
-- [x] **Update `yelp.py`**: Extract the `"price"` attribute (which is already `$`-`$$$$`) and include `"price_range"` in the returned dict.
+## 1. Database Integration (Snowflake)
+- [x] **Update `app/services/snowflake.py`**:
+  - Add `get_historical_risks(venue_id, venue_name)` to retrieve past `RISK_DESCRIPTION`s.
+  - Modify `log_risk_event` to prevent duplicate entries for the exact same risk description and venue.
 
-## 2. Shared State (`app/models/state.py`)
-- [x] Update `PathfinderState` documentation and comments to reflect that `cost_profiles` now stores `price_range` and `confidence` rather than granular numerical costs. (We will keep the key name `cost_profiles` to minimize breakage across the graph).
+## 2. Scout Agent Updates
+- [x] **Fetch Historical Risks**:
+  - In `app/agents/scout.py`, securely initialize the Snowflake service.
+  - After identifying the top candidates, loop over them and append `candidate["historical_risks"]`.
 
-## 3. Cost Analyst (Node 4)
-- [x] **Remove Scraping**: Delete `_firecrawl_map`, `_firecrawl_scrape`, `_guess_pricing_pages`, and `_is_website_alive`.
-- [x] **Remove Gemini Extractor**: Delete `_COST_PROMPT` and `_extract_pricing`.
-- [x] **Implement Heuristics**: Rewrite `_analyze_venue_cost` (or create a new sync function) to:
-  - Read `price_range` added by the Scout from Google and Yelp.
-  - Implement conflict resolution (Google vs. Yelp).
-  - Assign `pricing_confidence` (`high`, `medium`, `low`, `none`).
-  - Calculate a simple `value_score` mapping for the Synthesiser to use. 
-  - Remove CIBA/Auth0 triggers (as pricing is now informational only).
+## 3. Critic Agent Updates
+- [x] **Flag Historical Risks**:
+  - In `app/agents/critic.py`, read the `historical_risks` and proactively append them to the `risk_flags` output as `high` severity. This organically warns the LLM logic and system.
 
-## 4. Synthesiser (Node 6)
-- [x] **Update Schema**: Modify the generated `VenueResult` to include `price_range` and `price_confidence`.
-- [x] **Update Prompt**: Ensure `_SYNTHESIS_PROMPT` only generates `why` and `watch_out`.
-- [x] **Global Consensus**: Add a new step after ranking the top venues to pass the top 3 back to Gemini to generate the `"global_consensus"` field. Emplace this at the root of the output JSON.
-- [x] **Email Automation Transition**: Change all CIBA flows through Auth0 to use pure emailing once a global consensus is reached. Allow the user to automate sending a Gemini-generated email if they provide access via the token vault.
+## 4. Synthesizer Agent Updates
+- [x] **Surface to Frontend**:
+  - Update `app/agents/synthesiser.py` to map the `historical_vetoes` into the exported JSON `VenueResult` so it renders explicitly on the UI.
 
 ## 5. Verification & Security Review
-- [x] Run `pytest backend/tests/test_commander.py`
-- [x] Run `python backend/tests/test_all_nodes_connected.py` (Integration workflow test)
-- [x] Review all modified code for exposed secrets, sensitive info, and ensure it aligns with "What would Zuck do" (fast, simple, robust, production-ready).
+- [x] Verify functionality, check for syntax errors.
+- [x] Run `run_interactive.py` simulating a known historical event (like Scotiabank stabbing) to verify data mapping without duplicates.
+- [x] Fill out out the Review Summary.
 
 ## Review Summary
-The pricing model architecture was successfully migrated to a simplified, fast, heuristic-based approach:
-1. **Node 2 (Scout)** and discovery APIs were updated to capture string-based `$–$$$$` price ranges directly from Google Places and Yelp, carrying these seamlessly downstream. Oh, and the deduplication function was improved to merge source prices together if both Google and Yelp return a venue.
-2. **Node 4 (Cost Analyst)** was completely shredded down to its basics. All web crawling via Firecrawl, slow HTTP requests, and generative price extraction via Gemini were removed. Now, it functions as a fast, pure heuristic node: matching price signals across sources to determine `confidence` and assigning a simple `value_score` to feed into the synthesizer's formula.
-3. **Node 6 (Synthesiser)** was refactored significantly to reflect the new global consensus mechanism. Instead of pushing granular cost structures per-venue, it outputs the `price_range` array and uses Gemini to synthesize these into a strong `global_consensus` message spanning all choices.
-4. **Security & Speed Focus (Zuck strategy)**: By stripping out the Firecrawl mechanism and the heavy, expensive Gemini schema extraction per-venue for prices, we drastically reduced response times, API costs, and the risk of the system crashing on protected web pages. CIBA Auth has been smoothly transitioned back to the generic "action requests" pipeline within Synthesiser for emails ("send_email"), ensuring that the Token Vault is used specifically for automated outreach rather than complex payment authorization flows. Code is clean and production-ready.
+1. **DB Updates**: The `get_historical_risks` function now pulls exact descriptions from Snowflake `VENUE_RISK_EVENTS` matching `VENUE_ID` or `VENUE_NAME`. Duplicate protection was successfully added to `log_risk_event` (it checks against existing rows before blindly inserting).
+2. **Scout Updates**: Scout now proactively fetches and assigns the `historical_risks` array to each discovered venue.
+3. **Critic Updates**: Found risks map neatly into `risk_flags` out of the Critic as `severity="high"`, immediately reducing the risk score natively downstream without needing extra LLM cycles.
+4. **Synthesizer Updates**: Handled mapping the `historical_vetoes` array perfectly into the `ranked_results` JSON object so it safely hits the frontend payload verbatim. Everything was done cleanly via `os.getenv`.
+
+---
+
+# Veto Mechanism and Snowflake DB Integration Plan
+
+This plan outlines the steps to change the Critic's behavior from halting the graph (global veto) to passively logging high-risk events to the Snowflake `VENUE_RISK_EVENTS` table.
+
+## 1. Database Integration (Snowflake)
+- [x] **Update `app/services/snowflake.py`**:
+  - Locate `log_risk_event` or create `save_veto_event` to insert into `VENUE_RISK_EVENTS`.
+  - Ensure the columns match: `EVENT_ID` (VARCHAR), `VENUE_NAME` (VARCHAR), `VENUE_ID` (VARCHAR), `RISK_DESCRIPTION` (VARCHAR), `WEATHER_CONTEXT` (VARCHAR), `VETO_TIMESTAMP` (TIMESTAMP_NTZ).
+  - Use `uuid.uuid4().hex` to generate a random `EVENT_ID` and `datetime.utcnow()` for the timestamp.
+
+## 2. Critic Agent Updates (`app/agents/critic.py`)
+- [x] **Disable Fast-Fail**:
+  - Ensure the Critic prompt and logic no longer triggers `fast_fail` or `veto` that interrupts the graph flow.
+  - Instead of returning `veto: True`, it should evaluate Condition A and B, flag them as high-severity risks in `risk_flags`, and call the Snowflake service.
+- [x] **Log to Snowflake**:
+  - Inject the `SnowflakeIntelligence` initialization and call the risk logging function from within the `critic_node` when a dealbreaker is found.
+
+## 3. Shared State Updates (`app/models/state.py`)
+- [x] **State Clean up**:
+  - Keep `veto` and `fast_fail` states for API backward compatibility (optional), but ensure they are not used to abort LangGraph runs. Or, remove them entirely if they are explicitly unneeded by the frontend.
+  - Ensure `risk_flags` robustly carries the dealbreakers to the Synthesizer.
+
+## 4. Verification & Security Review
+- [x] Run test scripts if any (`pytest` or `test_pipeline_e2e.py`) to verify the graph doesn't abort.
+- [x] Review all modified code for exposed secrets, sensitive info, and ensure it aligns with the "Mark Zuckerberg approach" (fast, simple, robust, production-ready, security tight).
+- [x] Confirm no `.env` values or tokens are hardcoded.
+
+## Review Summary
+The Veto Snowflake integration was fully implemented with a focus on simplicity, security, and minimizing downstream breaks.
+
+1. **Snowflake Database Implementation (`services/snowflake.py`)**:
+   - Upgraded `log_risk_event` to explicitly insert into `VENUE_RISK_EVENTS` utilizing all specified columns: `EVENT_ID`, `VENUE_NAME`, `VENUE_ID`, `RISK_DESCRIPTION`, `WEATHER_CONTEXT`, and `VETO_TIMESTAMP`. Used secure `uuid` generation and `datetime.utcnow()` without introducing external dependencies.
+
+2. **Critic Node Refinement (`agents/critic.py`)**:
+   - Stripped out the blocking behavior of `fast_fail`. The node still natively analyzes risks via LLM correctly, but upon hitting "Fast-Fail Condition A/B", it now initiates `SnowflakeIntelligence` and logs exactly to the DB.
+   - It outputs exactly `veto: False` natively to LangGraph—which skips the `Command/Retry` graph loop, letting the flagged downstream variables proceed to `Synthesizer`.
+   - Security check: Handled the `Snowflake` connection through existing exact `os.getenv` environment variables loaded securely. Absolutely zero hardcoded tokens.
+
+3. **Overall Impact**:
+   - The graph flows cleanly, risk flags correctly warn the user through the standard frontend UX, while the database builds a historical log of skipped events quietly without aggressively breaking the end-user loop context. Fast, stable, production-ready.
