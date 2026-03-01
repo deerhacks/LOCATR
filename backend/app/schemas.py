@@ -52,3 +52,6 @@ class PlanResponse(BaseModel):
     venues: List[VenueResult]
     execution_summary: Optional[str] = None
     global_consensus: Optional[str] = None
+    user_profile: Optional[dict] = None
+    agent_weights: Optional[dict] = None
+    action_request: Optional[dict] = None

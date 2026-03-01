@@ -96,6 +96,7 @@ async def websocket_plan(websocket: WebSocket):
         data = await websocket.receive_json()
         initial_state = {
             "raw_prompt": data.get("prompt", ""),
+            "auth_user_id": data.get("auth_user_id"),
             "parsed_intent": {},
             "complexity_tier": "tier_2",
             "active_agents": [],
@@ -166,6 +167,9 @@ async def websocket_plan(websocket: WebSocket):
                     venues=graph_result.get("ranked_results", []),
                     execution_summary="Pipeline complete.",
                     global_consensus=graph_result.get("global_consensus"),
+                    user_profile=graph_result.get("user_profile"),
+                    agent_weights=graph_result.get("agent_weights"),
+                    action_request=graph_result.get("action_request"),
                 ).model_dump(),
             })
     except WebSocketDisconnect:
@@ -177,6 +181,27 @@ async def websocket_plan(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
+
+
+@router.get("/user/preferences")
+async def get_preferences(auth_user_id: str):
+    """Return the preferences stored in a user's Auth0 app_metadata."""
+    from app.services.auth0 import auth0_service
+    profile = await auth0_service.get_user_profile(auth_user_id)
+    preferences = profile.get("app_metadata", {}).get("preferences", {})
+    return {"preferences": preferences}
+
+
+@router.patch("/user/preferences")
+async def update_preferences(body: dict):
+    """Merge new preference values into the user's Auth0 app_metadata."""
+    auth_user_id = body.get("auth_user_id")
+    preferences = body.get("preferences", {})
+    if not auth_user_id:
+        return {"ok": False, "error": "auth_user_id required"}
+    from app.services.auth0 import auth0_service
+    ok = await auth0_service.update_app_metadata(auth_user_id, {"preferences": preferences})
+    return {"ok": ok}
 
 
 @router.get("/health")

@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import { useUser } from '@auth0/nextjs-auth0/client'
 import SearchBar from './SearchBar'
 import AgentRow from './AgentRow'
 import AgentSidebar from './AgentSidebar'
 import ResultsSidebar from './ResultsSidebar'
 import Sidebar from './Sidebar'
+import PreferencesPanel from './PreferencesPanel'
 
 const GLOBAL_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400&family=Inter:wght@300;400;500&display=swap');
@@ -62,9 +64,9 @@ function CrosshairIcon({ size = 14, color = 'currentColor' }) {
   )
 }
 
-function Pill({ children, style = {} }) {
+function Pill({ children, style = {}, onClick }) {
   return (
-    <div style={{
+    <div onClick={onClick} style={{
       display: 'inline-flex',
       alignItems: 'center',
       gap: 10,
@@ -117,6 +119,9 @@ export default function MapComponent() {
   const wsRef = useRef(null)
   const markersRef = useRef([])
 
+  const { user } = useUser()
+  const [showPrefs, setShowPrefs] = useState(false)
+
   const [loaded, setLoaded] = useState(false)
   const [center, setCenter] = useState({ lng: -79.3470, lat: 43.6515 })
 
@@ -126,6 +131,7 @@ export default function MapComponent() {
   const [agentLogs, setAgentLogs] = useState([])
   const [results, setResults] = useState(null)
   const [selectedVenueIdx, setSelectedVenueIdx] = useState(0)
+  const [actionRequest, setActionRequest] = useState(null)
 
   // WS cleanup on unmount
   useEffect(() => {
@@ -186,6 +192,7 @@ export default function MapComponent() {
     setAgentLogs([])
     setActiveAgent(null)
     setSelectedVenueIdx(0)
+    setActionRequest(null)
   }
 
   const handleSearch = (query) => {
@@ -201,7 +208,9 @@ export default function MapComponent() {
     wsRef.current = ws
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ prompt: query, member_locations: [] }))
+      const payload = { prompt: query, member_locations: [] }
+      if (user?.sub) payload.auth_user_id = user.sub
+      ws.send(JSON.stringify(payload))
     }
 
     ws.onmessage = (event) => {
@@ -218,6 +227,7 @@ export default function MapComponent() {
         setResults(msg.data)
         setSearchState('results')
         setActiveAgent(null)
+        if (msg.data?.action_request) setActionRequest(msg.data.action_request)
         ws.close()
       }
     }
@@ -432,8 +442,20 @@ export default function MapComponent() {
                 {formatCoord(center.lng, 'E', 'W')}
               </span>
             </Pill>
+            {user && (
+              <Pill style={{ gap: 6, cursor: 'pointer' }} onClick={() => setShowPrefs(true)}>
+                {user.picture && (
+                  <img src={user.picture} alt="" style={{ width: 16, height: 16, borderRadius: '50%', objectFit: 'cover' }} />
+                )}
+                <span style={{ fontFamily: MONO, fontSize: 12, letterSpacing: '0.16em', color: 'rgba(255,255,255,0.65)', textTransform: 'uppercase' }}>
+                  Preferences
+                </span>
+              </Pill>
+            )}
           </div>
         )}
+
+        {showPrefs && <PreferencesPanel onClose={() => setShowPrefs(false)} />}
 
         {/* Sidebar — searching + results */}
         {searchState !== 'idle' && (
@@ -452,6 +474,10 @@ export default function MapComponent() {
             }
           }}
           onNewSearch={handleNewSearch}
+          actionRequest={actionRequest}
+          onDismissAction={() => setActionRequest(null)}
+          userProfile={results?.user_profile}
+          agentWeights={results?.agent_weights}
           />
         )}
 

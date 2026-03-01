@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
+import { useUser } from '@auth0/nextjs-auth0/client'
 
 const STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400&display=swap');
@@ -180,6 +181,7 @@ function Trail() {
 
 export default function Home() {
   const MONO = "'Barlow Condensed', 'Arial Narrow', sans-serif"
+  const { user, isLoading } = useUser()
 
   return (
     <>
@@ -189,6 +191,36 @@ export default function Home() {
       <div style={{ position: 'fixed', inset: 0, backgroundImage: 'url(/noise.svg)', backgroundRepeat: 'repeat', pointerEvents: 'none', zIndex: 9999 }} />
 
       <Trail />
+
+      {/* Auth button — top right */}
+      {!isLoading && (
+        <div style={{
+          position: 'fixed', top: 24, right: 28, zIndex: 100,
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          {user ? (
+            <>
+              {user.picture && (
+                <img
+                  src={user.picture}
+                  alt={user.name}
+                  style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.18)', objectFit: 'cover' }}
+                />
+              )}
+              <span style={{ fontFamily: MONO, fontSize: 13, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.55)' }}>
+                {user.nickname || user.name}
+              </span>
+              <a href="/api/auth/logout" className="cta" style={{ padding: '6px 16px 5px', fontSize: 10 }}>
+                LOGOUT
+              </a>
+            </>
+          ) : (
+            <a href="/api/auth/login" className="cta">
+              LOG IN
+            </a>
+          )}
+        </div>
+      )}
 
       <main style={{
         position: 'relative', zIndex: 10,
@@ -219,12 +251,17 @@ export default function Home() {
             color: 'rgba(255,255,255,0.35)',
             margin: 0, textAlign: 'center',
           }}>
-            Find your perfect venue.
+            {user ? `Welcome back, ${user.nickname || user.name?.split(' ')[0]}.` : 'Find your perfect venue.'}
           </p>
         </div>
 
-        <div className="land-4">
+        <div className="land-4" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           <Link href="/map" className="cta">Get Started</Link>
+          {!user && !isLoading && (
+            <a href="/api/auth/login?returnTo=/map" className="cta" style={{ background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.50)' }}>
+              Sign In for Personalization
+            </a>
+          )}
         </div>
 
       </main>

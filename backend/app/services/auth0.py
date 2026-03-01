@@ -39,30 +39,51 @@ class Auth0Service:
         """Retrieve user metadata from Auth0 to personalize agent weights."""
         if not user_id:
             return {}
-            
+
         token = await self.get_management_token()
         if not token:
             return {}
-            
+
         url = f"https://{self.domain}/api/v2/users/{user_id}"
         headers = {"Authorization": f"Bearer {token}"}
-        
+
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 user_data = resp.json()
-                
-                # We specifically care about app_metadata and user_metadata
-                # which would hold profile info like "student", "senior", "budget", etc.
-                profile = {}
-                profile.update(user_data.get("user_metadata", {}))
-                profile.update(user_data.get("app_metadata", {}))
-                
-                return profile
+                return {
+                    "user_id": user_data.get("user_id"),
+                    "email": user_data.get("email"),
+                    "name": user_data.get("name"),
+                    "picture": user_data.get("picture"),
+                    "app_metadata": user_data.get("app_metadata", {}),
+                    "user_metadata": user_data.get("user_metadata", {}),
+                }
         except Exception as e:
             logger.error(f"Failed to fetch user profile for {user_id}: {e}")
             return {}
+
+    async def update_app_metadata(self, user_id: str, app_metadata: Dict[str, Any]) -> bool:
+        """Update a user's app_metadata in Auth0 (merges with existing data)."""
+        if not user_id:
+            return False
+
+        token = await self.get_management_token()
+        if not token:
+            return False
+
+        url = f"https://{self.domain}/api/v2/users/{user_id}"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.patch(url, json={"app_metadata": app_metadata}, headers=headers)
+                resp.raise_for_status()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to update app_metadata for {user_id}: {e}")
+            return False
 
     async def get_idp_token(self, user_id: str, provider: str = "google-oauth2") -> Optional[str]:
         """Retrieve a third-party Identity Provider token (e.g., Google Calendar) via Token Vault."""
