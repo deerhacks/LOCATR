@@ -78,7 +78,7 @@ def scout_node(state: PathfinderState) -> PathfinderState:
 
     # Build search query from intent fields
     activity = intent.get("activity", "")
-    location = intent.get("location", "Toronto")
+    location = intent.get("location") or "Toronto"
     raw_prompt = state.get("raw_prompt", "")
     query = activity if activity else raw_prompt
 

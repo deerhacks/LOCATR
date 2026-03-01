@@ -41,6 +41,7 @@ class PathfinderState(TypedDict, total=False):
 
     # ── Final ranked output ──
     ranked_results: List[dict]
+    global_consensus: Optional[str]
     action_request: Optional[dict] # For OAuth UI presentation in Synthesiser
 
     # ── User-provided context ──

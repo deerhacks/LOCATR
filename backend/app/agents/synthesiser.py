@@ -191,10 +191,10 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
         logger.info("Synthesiser: no candidates to rank")
         return {"ranked_results": []}
 
-    vibe_scores = state.get("vibe_scores", {})
-    cost_profiles = state.get("cost_profiles", {})
-    risk_flags = state.get("risk_flags", {})
-    agent_weights = state.get("agent_weights", {})
+    vibe_scores = state.get("vibe_scores") or {}
+    cost_profiles = state.get("cost_profiles") or {}
+    risk_flags = state.get("risk_flags") or {}
+    agent_weights = state.get("agent_weights") or {}
     raw_prompt = state.get("raw_prompt", "")
     
     requires_oauth = state.get("requires_oauth", False)

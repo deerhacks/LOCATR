@@ -14,13 +14,6 @@ from app.agents.critic import critic_node
 from app.agents.synthesiser import synthesiser_node
 
 
-def _should_retry(state: PathfinderState) -> str:
-    """Conditional edge: retry if the Critic vetoed the plan or triggered fast_fail."""
-    if state.get("fast_fail") or state.get("veto"):
-        return "commander"
-    return "synthesiser"
-
-
 async def parallel_analysts_node(state: PathfinderState) -> PathfinderState:
     """
     Runs the Vibe Matcher, Cost Analyst, and Critic concurrently.
@@ -84,11 +77,7 @@ def build_graph() -> StateGraph:
     # Fan out to analysts running concurrently
     graph.add_edge("scout", "parallel_analysts")
 
-    # ── Conditional retry or synthesis ──
-    graph.add_conditional_edges("parallel_analysts", _should_retry, {
-        "commander": "commander",
-        "synthesiser": "synthesiser",
-    })
+    graph.add_edge("parallel_analysts", "synthesiser")
 
     # Synthesiser → END
     graph.add_edge("synthesiser", END)
