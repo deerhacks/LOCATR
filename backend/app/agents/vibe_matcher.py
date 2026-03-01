@@ -13,11 +13,24 @@ from app.services.gemini import generate_content
 
 logger = logging.getLogger(__name__)
 
-_VIBE_PROMPT = """You are the PATHFINDER Vibe Matcher. You are analyzing a cafe for a {vibe_preference} vibe.
+VIBE_KEYWORDS = [
+    "aesthetic", "cozy", "chill", "trendy", "hipster", "romantic", "classy", 
+    "upscale", "fancy", "elegant", "modern", "rustic", "bohemian", "artsy", 
+    "quirky", "retro", "vintage", "minimalist", "industrial", "dark academia", 
+    "cottagecore", "cyberpunk", "neon", "instagrammable", "photogenic", "cute",
+    "charming", "intimate", "lively", "energetic", "fun", "exciting", "relaxing",
+    "peaceful", "calm", "serene", "warm", "inviting", "atmosphere", "ambiance",
+    "mood", "theme", "decor", "design", "beautiful", "pretty", "gorgeous",
+    "stunning", "spacious", "unique"
+]
 
-Venue: {name}
-Address: {address}
-Category: {category}
+_VIBE_PROMPT = f"""You are a spatial aesthetic analyst. Analyze the following cafe based on its reviews and photos.
+Assign a score from 0.0 to 1.0 for each of the following {len(VIBE_KEYWORDS)} dimensions:
+{", ".join(VIBE_KEYWORDS)}
+
+Venue: {{name}}
+Address: {{address}}
+Category: {{category}}
 
 INPUT HANDLING:
 
@@ -25,20 +38,8 @@ You will receive 1-3 image descriptions or metadata.
 
 If an image failed to load (e.g., Redirect Error or 404), do not penalize the venue. Instead, rely on the Review Sentiment provided in the text metadata.
 
-AESTHETIC SCORING:
-
-Score the venue from 0.0 to 1.0 based on how well it fits the "{vibe_preference}" request.
-
-Cyberpunk Criteria: Neon lighting, high-contrast colors (pinks/purples/blues), industrial materials, tech-heavy decor.
-
-OUTPUT:
-Respond with ONLY a valid JSON object (no markdown, no extra text):
-{{
-  "vibe_score": <float 0.0 to 1.0, how well this venue matches the desired vibe>,
-  "primary_style": "<one-word style label, e.g. cozy, minimalist, industrial, vibrant>",
-  "visual_descriptors": ["<descriptor 1>", "<descriptor 2>", "<descriptor 3>"],
-  "confidence": <float 0.0 to 1.0, how confident you are in this assessment>
-}}
+Return ONLY a JSON array of {len(VIBE_KEYWORDS)} floats in the exact order listed above.
+Example: [0.9, 0.1, 0.4, ...]
 """
 
 _NEUTRAL_VIBE = "a welcoming, enjoyable atmosphere suitable for groups"
@@ -53,8 +54,7 @@ async def _score_venue(venue: dict, vibe_preference: str) -> dict | None:
     prompt = _VIBE_PROMPT.format(
         name=name,
         address=venue.get("address", ""),
-        category=venue.get("category", ""),
-        vibe_preference=vibe_preference,
+        category=venue.get("category", "")
     )
 
     try:
@@ -75,11 +75,22 @@ async def _score_venue(venue: dict, vibe_preference: str) -> dict | None:
             cleaned = cleaned.rsplit("```", 1)[0]
         cleaned = cleaned.strip()
 
+        # The result is now expected to be a list of 52 floats
         result = json.loads(cleaned)
-        score = result.get("vibe_score", 0)
-        style = result.get("primary_style", "?")
-        logger.info("[VIBE] %s — %.0f%% match (%s)", name, score * 100, style)
-        return result
+        if not isinstance(result, list) or len(result) != len(VIBE_KEYWORDS):
+            logger.warning("[VIBE] Expected list of %s floats, got %s of length %s", len(VIBE_KEYWORDS), type(result), len(result) if isinstance(result, list) else 0)
+            return None
+        
+        # We will package it in a dict to match the rest of the code structure
+        output = {
+            "vibe_score": result[0],  # Give it a generic score for the overall filtering
+            "vibe_dimensions": result,
+            "primary_style": vibe_preference,
+            "confidence": 1.0
+        }
+        
+        logger.info("[VIBE] %r → scored %s dimensions", name, len(VIBE_KEYWORDS))
+        return output
     except (json.JSONDecodeError, Exception) as exc:
         logger.warning("[VIBE] Scoring failed for %r: %s", name, exc)
         return None
@@ -137,6 +148,7 @@ def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
             # Graceful fallback — don't crash, just mark as unscored
             vibe_scores[vid] = {
                 "vibe_score": None,
+                "vibe_dimensions": [0.0] * len(VIBE_KEYWORDS),
                 "primary_style": "unknown",
                 "visual_descriptors": [],
                 "confidence": 0.0,

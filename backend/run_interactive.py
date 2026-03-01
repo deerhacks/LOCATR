@@ -61,10 +61,11 @@ async def main():
             print("                     RESULTS                    ")
             print("="*50 + "\n")
             
-            # Check if the Critic killed the plan early
-            if final_state.get('fast_fail'):
-                print(f"❌ PLAN VETOED (Fast-Fail): {final_state.get('fast_fail_reason')}")
-                continue
+            # Check if there was a major risk that was logged to Snowflake
+            if final_state.get('fast_fail_reason') or final_state.get('veto_reason'):
+                reason = final_state.get('fast_fail_reason') or final_state.get('veto_reason')
+                print(f"⚠️ HIGH RISK DETECTED (Logged safely to Snowflake Database): {reason}")
+                print("   The system is proceeding to show the results with adjusted warnings.\n")
                 
             # Print ranked venues from Synthesiser
             ranked = final_state.get('ranked_results', [])

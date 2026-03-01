@@ -13,6 +13,8 @@ from app.models.state import PathfinderState
 from app.services.openweather import get_weather
 from app.services.predicthq import get_events
 from app.services.gemini import generate_content
+import os
+from app.services.snowflake import SnowflakeIntelligence
 
 logger = logging.getLogger(__name__)
 
@@ -101,15 +103,29 @@ def critic_node(state: PathfinderState) -> PathfinderState:
 
             analysis = json.loads(resp.strip())
             risks = analysis.get("risks", [])
-            high = [r for r in risks if isinstance(r, dict) and r.get("severity") == "high"]
-            if high:
-                logger.info("[CRITIC] %s — %d high-severity risk%s flagged", name, len(high), "s" if len(high) != 1 else "")
-            else:
-                logger.info("[CRITIC] %s — no major risks found", name)
-            return venue_id, analysis
+            # ── Inject Historical Risks ── 
+            # These bypass LLM hallucinations and forcefully apply risk penalties
+            hist_risks = venue.get("historical_risks", [])
+            for hr in hist_risks:
+                risks.append({
+                    "type": "historical_veto",
+                    "severity": "high",
+                    "detail": f"[HISTORICAL RISK] {hr}"
+                })
+            analysis["risks"] = risks
+
+            logger.info("[CRITIC] %s → new_risks=%d | hist_risks=%d | fast_fail=%s%s",
+                        name,
+                        len(risks) - len(hist_risks),
+                        len(hist_risks),
+                        analysis.get("fast_fail"),
+                        f" ({analysis.get('fast_fail_reason')})" if analysis.get("fast_fail") else "")
+            for r in risks:
+                logger.info("[CRITIC]   [%s] %s: %s", r.get("severity", "?").upper(), r.get("type", "?"), r.get("detail", ""))
+            return venue_id, analysis, weather
         except Exception as e:
             logger.error("[CRITIC] Gemini call failed for %s: %s", venue_id, e)
-            return venue_id, {"risks": [], "fast_fail": False, "fast_fail_reason": None}
+            return venue_id, {"risks": [], "fast_fail": False, "fast_fail_reason": None}, {}
 
     async def _run_all():
         return await asyncio.gather(*[_analyze_venue(v) for v in top_candidates])
@@ -125,16 +141,27 @@ def critic_node(state: PathfinderState) -> PathfinderState:
     overall_fast_fail = False
     fast_fail_reason = None
 
-    for venue_id, analysis in results:
+    for venue_id, analysis, weather in results:
         risk_flags[venue_id] = analysis.get("risks", [])
         if analysis.get("fast_fail") and venue_id == top_candidates[0].get("venue_id", top_candidates[0].get("name")):
-            overall_fast_fail = True
+            # Instead of halting the graph, log to Snowflake
             fast_fail_reason = analysis.get("fast_fail_reason")
+            try:
+                sf = SnowflakeIntelligence(
+                    user=os.getenv('SNOWFLAKE_USER'),
+                    password=os.getenv('SNOWFLAKE_PASSWORD'),
+                    account=os.getenv('SNOWFLAKE_ACCOUNT')
+                )
+                venue_name = next((v.get("name") for v in top_candidates if v.get("venue_id", v.get("name")) == venue_id), venue_id)
+                sf.log_risk_event(venue_name, venue_id, fast_fail_reason, str(weather))
+                logger.info("[CRITIC] Logged veto to Snowflake for %s", venue_name)
+            except Exception as e:
+                logger.error("[CRITIC] Failed to log risk event to Snowflake: %s", e)
 
-    if overall_fast_fail:
-        logger.info("[CRITIC] Fast-fail triggered: %s", fast_fail_reason)
-    else:
-        logger.info("[CRITIC] All top picks cleared risk review")
+    logger.info("[CRITIC] ── DONE")
+    if fast_fail_reason:
+        logger.info("[CRITIC] Highest risk logged (graph proceeds): %s", fast_fail_reason)
+    logger.info("[CRITIC] risk_flags:\n%s", json.dumps(risk_flags, indent=2))
 
-    return {"risk_flags": risk_flags, "fast_fail": overall_fast_fail, "fast_fail_reason": fast_fail_reason, "veto": overall_fast_fail, "veto_reason": fast_fail_reason}
+    return {"risk_flags": risk_flags, "fast_fail": False, "fast_fail_reason": fast_fail_reason, "veto": False, "veto_reason": fast_fail_reason}
 

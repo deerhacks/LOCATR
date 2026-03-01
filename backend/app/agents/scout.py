@@ -11,6 +11,8 @@ from math import radians, cos, sin, asin, sqrt
 from app.models.state import PathfinderState
 from app.services.google_places import search_places
 from app.services.yelp import search_yelp
+import os
+from app.services.snowflake import SnowflakeIntelligence
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +109,7 @@ def scout_node(state: PathfinderState) -> PathfinderState:
     # Merge all results
     all_venues = google_results + yelp_results
 
-    # Deduplicate
+    # After deduplication
     unique_venues = _deduplicate(all_venues)
     removed = len(all_venues) - len(unique_venues)
     if removed:
@@ -115,7 +117,31 @@ def scout_node(state: PathfinderState) -> PathfinderState:
 
     # Cap at 10
     candidates = unique_venues[:10]
+    
+    # ── Inject Historical Risks ──
+    try:
+        sf = SnowflakeIntelligence(
+            user=os.getenv('SNOWFLAKE_USER'),
+            password=os.getenv('SNOWFLAKE_PASSWORD'),
+            account=os.getenv('SNOWFLAKE_ACCOUNT')
+        )
+        for cand in candidates:
+            c_vid = cand.get("venue_id", cand.get("name", "unknown"))
+            c_name = cand.get("name")
+            past_risks = sf.get_historical_risks(c_vid, c_name)
+            if past_risks:
+                logger.info("[SCOUT] Found %d historical risks for %s", len(past_risks), c_name)
+            cand["historical_risks"] = past_risks
+    except Exception as exc:
+        logger.error("[SCOUT] Failed to enrich historical risks: %s", exc)
+        for cand in candidates:
+            if "historical_risks" not in cand:
+                cand["historical_risks"] = []
 
-    logger.info("[SCOUT] Shortlisted %d venues for analysis", len(candidates))
+    logger.info("[SCOUT] ── DONE — %d candidates (%d Google, %d Yelp, %d after dedup)",
+                len(candidates), len(google_results), len(yelp_results), len(unique_venues))
+    logger.info("[SCOUT] candidate_venues:\n%s",
+                "\n".join(f"  [{i+1}] {v.get('name')} | rating={v.get('rating')} | price={v.get('price_range')} | hist_risks={len(v.get('historical_risks',[]))} | {v.get('address', '')}"
+                          for i, v in enumerate(candidates)))
 
     return {"candidate_venues": candidates}
