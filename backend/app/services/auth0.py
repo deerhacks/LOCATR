@@ -1,5 +1,7 @@
 import logging
 import httpx
+import base64
+from email.message import EmailMessage
 from typing import Optional, Dict, Any
 from app.core.config import settings
 
@@ -180,6 +182,43 @@ class Auth0Service:
         except Exception as e:
             logger.error(f"CIBA polling failed: {e}")
             return {"status": "error", "detail": str(e)}
+
+    async def send_gmail_message(self, token: str, recipient: str, subject: str, html_body: str) -> bool:
+        """
+        Send an email via the Gmail API using an OAuth2 token retrieved from Auth0's Token Vault.
+        """
+        try:
+            # 1. Construct the MIME message
+            msg = EmailMessage()
+            msg["To"] = recipient
+            msg["Subject"] = subject
+            msg.set_content(html_body, subtype="html")
+            
+            # 2. Base64url encode the raw byte string (required by Gmail API)
+            raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+            
+            # 3. Fire the POST request to Gmail
+            url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            body = {
+                "raw": raw_msg
+            }
+            
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, headers=headers, json=body)
+                resp.raise_for_status()
+                logger.info(f"Successfully sent automated Gmail to {recipient}!")
+                return True
+                
+        except httpx.HTTPError as he:
+            logger.error(f"HTTP Error sending Gmail: {he.response.text if hasattr(he, 'response') else he}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to send automated Gmail: {e}")
+            return False
 
 # Export an instance
 auth0_service = Auth0Service()
