@@ -46,6 +46,10 @@ const SIDEBAR_STYLES = `
     from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0);   }
   }
+  @keyframes text-shimmer {
+    0%   { background-position: 200% center; }
+    100% { background-position: -200% center; }
+  }
   .sidebar-enter {
     animation: sidebar-slide-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
@@ -56,14 +60,31 @@ const SIDEBAR_STYLES = `
     animation: group-appear 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
   .agent-log-scroll::-webkit-scrollbar { display: none; }
+  .log-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(255,255,255,0.35) 0%,
+      rgba(255,255,255,0.35) 25%,
+      rgba(255,255,255,0.92) 50%,
+      rgba(255,255,255,0.35) 75%,
+      rgba(255,255,255,0.35) 100%
+    );
+    background-size: 250% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: text-shimmer 2.4s linear infinite;
+  }
 `
 
-function AgentGroup({ agent, logs, color, label, isActive, isExpanded, onToggle }) {
+function AgentGroup({ agent, logs, color, label, isActive, isExpanded, onToggle, isNew }) {
   const scrollRef = useRef(null)
 
   useEffect(() => {
     if (isExpanded && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      requestAnimationFrame(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      })
     }
   }, [logs.length, isExpanded])
 
@@ -72,7 +93,7 @@ function AgentGroup({ agent, logs, color, label, isActive, isExpanded, onToggle 
 
   return (
     <div
-      className="agent-group-appear"
+      className={isNew ? "agent-group-appear" : ""}
       style={{
         margin: '0 12px 6px',
         borderRadius: 8,
@@ -135,16 +156,18 @@ function AgentGroup({ agent, logs, color, label, isActive, isExpanded, onToggle 
         /* Collapsed: show latest log + toggle */
         <div style={{ padding: '0 12px 10px' }}>
           {latestLog && (
-            <div style={{
-              fontFamily: BODY,
-              fontWeight: 400,
-              fontSize: 13,
-              letterSpacing: '0.01em',
-              color: 'rgba(255,255,255,0.50)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}>
+            <div
+              className="log-shimmer"
+              style={{
+                fontFamily: BODY,
+                fontWeight: 400,
+                fontSize: 13,
+                letterSpacing: '0.01em',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {stripPrefix(latestLog.message)}
             </div>
           )}
@@ -192,12 +215,13 @@ function AgentGroup({ agent, logs, color, label, isActive, isExpanded, onToggle 
             {logs.map((entry, i) => (
               <div
                 key={i}
+                className={i === logs.length - 1 ? 'log-shimmer' : ''}
                 style={{
                   fontFamily: BODY,
                   fontWeight: 400,
                   fontSize: 13,
                   letterSpacing: '0.01em',
-                  color: 'rgba(255,255,255,0.50)',
+                  ...(i !== logs.length - 1 && { color: 'rgba(255,255,255,0.50)' }),
                   padding: '3px 0',
                   borderBottom: i < logs.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none',
                   wordBreak: 'break-word',
@@ -245,6 +269,7 @@ export default function AgentSidebar({ logs = [], activeAgent }) {
   const scrollRef = useRef(null)
   const [expanded, setExpanded] = useState({})
   const { width, onMouseDown } = useResizable(400)
+  const appearedAgents = useRef(new Set())
 
   // Group logs by agent, preserving order of first appearance
   const agentGroups = useMemo(() => {
@@ -268,12 +293,12 @@ export default function AgentSidebar({ logs = [], activeAgent }) {
     }))
   }, [logs])
 
-  // Auto-scroll to bottom when new groups appear
+  // Auto-scroll to bottom when new logs appear
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [agentGroups.length])
+    requestAnimationFrame(() => {
+      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    })
+  }, [logs.length])
 
   const toggleExpand = (agent) => {
     setExpanded((prev) => ({ ...prev, [agent]: !prev[agent] }))
@@ -332,18 +357,23 @@ export default function AgentSidebar({ logs = [], activeAgent }) {
             padding: '10px 0 16px',
           }}
         >
-          {agentGroups.map((group) => (
-            <AgentGroup
-              key={group.agent}
-              agent={group.agent}
-              logs={group.logs}
-              color={group.color}
-              label={group.label}
-              isActive={activeAgent === group.agent}
-              isExpanded={!!expanded[group.agent]}
-              onToggle={() => toggleExpand(group.agent)}
-            />
-          ))}
+          {agentGroups.map((group) => {
+            const isNew = !appearedAgents.current.has(group.agent)
+            if (isNew) appearedAgents.current.add(group.agent)
+            return (
+              <AgentGroup
+                key={group.agent}
+                agent={group.agent}
+                logs={group.logs}
+                color={group.color}
+                label={group.label}
+                isActive={activeAgent === group.agent}
+                isExpanded={!!expanded[group.agent]}
+                onToggle={() => toggleExpand(group.agent)}
+                isNew={isNew}
+              />
+            )
+          })}
         </div>
       </div>
 

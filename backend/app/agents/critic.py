@@ -31,17 +31,12 @@ def critic_node(state: PathfinderState) -> PathfinderState:
     """
     candidates = state.get("candidate_venues", [])
 
-    logger.info("\n" + "─" * 60)
-    logger.info("[CRITIC] ── STARTING")
-    logger.info("[CRITIC] total candidates : %d  (evaluating top 3)", len(candidates))
+    top_candidates = candidates[:3]
+    names = ", ".join(v.get("name", "?") for v in top_candidates)
+    logger.info("[CRITIC] Risk-checking top picks: %s", names)
 
     if not candidates:
-        logger.info("[CRITIC] No candidates to evaluate — skipping")
         return {"risk_flags": {}, "veto": False, "veto_reason": None}
-
-    # Evaluate the top 3 candidates (to save time/tokens)
-    top_candidates = candidates[:3]
-    logger.info("[CRITIC] venues under review: %s", [v.get("name") for v in top_candidates])
     risk_flags = {}
 
     async def _analyze_venue(venue):
@@ -50,7 +45,7 @@ def critic_node(state: PathfinderState) -> PathfinderState:
         venue_id = venue.get("venue_id", venue.get("name", "unknown"))
         name = venue.get("name", venue_id)
 
-        logger.info("[CRITIC] Fetching weather + events for: %s (lat=%.4f, lng=%.4f)", name, lat or 0, lng or 0)
+        logger.info("[CRITIC] Checking weather + events near %s...", name)
 
         # Parallel fetch
         weather, events = await asyncio.gather(
@@ -58,10 +53,9 @@ def critic_node(state: PathfinderState) -> PathfinderState:
             get_events(lat, lng)
         )
 
-        logger.info("[CRITIC] %s — weather: %s | events nearby: %d",
-                    name,
-                    weather.get("condition", "unknown") if isinstance(weather, dict) else str(weather)[:60],
-                    len(events) if isinstance(events, list) else 0)
+        condition = weather.get("condition", "unknown") if isinstance(weather, dict) else "unknown"
+        n_events = len(events) if isinstance(events, list) else 0
+        logger.info("[CRITIC] %s — %s, %d event%s nearby", name, condition, n_events, "s" if n_events != 1 else "")
 
         # Prepare context for Gemini
         context = {
@@ -98,7 +92,6 @@ def critic_node(state: PathfinderState) -> PathfinderState:
         }}
         """
 
-        logger.info("[CRITIC] Calling Gemini for risk assessment on: %s", name)
         try:
             resp = await generate_content(prompt)
             if resp.startswith("```json"):
@@ -108,13 +101,11 @@ def critic_node(state: PathfinderState) -> PathfinderState:
 
             analysis = json.loads(resp.strip())
             risks = analysis.get("risks", [])
-            logger.info("[CRITIC] %s → risks=%d | fast_fail=%s%s",
-                        name,
-                        len(risks),
-                        analysis.get("fast_fail"),
-                        f" ({analysis.get('fast_fail_reason')})" if analysis.get("fast_fail") else "")
-            for r in risks:
-                logger.info("[CRITIC]   [%s] %s: %s", r.get("severity", "?").upper(), r.get("type", "?"), r.get("detail", ""))
+            high = [r for r in risks if isinstance(r, dict) and r.get("severity") == "high"]
+            if high:
+                logger.info("[CRITIC] %s — %d high-severity risk%s flagged", name, len(high), "s" if len(high) != 1 else "")
+            else:
+                logger.info("[CRITIC] %s — no major risks found", name)
             return venue_id, analysis
         except Exception as e:
             logger.error("[CRITIC] Gemini call failed for %s: %s", venue_id, e)
@@ -124,7 +115,6 @@ def critic_node(state: PathfinderState) -> PathfinderState:
         return await asyncio.gather(*[_analyze_venue(v) for v in top_candidates])
 
     # Run analysis for all top candidates
-    logger.info("[CRITIC] Running risk analysis concurrently for %d venues...", len(top_candidates))
     try:
         results = asyncio.run(_run_all())
     except RuntimeError:
@@ -141,10 +131,10 @@ def critic_node(state: PathfinderState) -> PathfinderState:
             overall_fast_fail = True
             fast_fail_reason = analysis.get("fast_fail_reason")
 
-    logger.info("[CRITIC] ── DONE — fast_fail=%s", overall_fast_fail)
-    if fast_fail_reason:
-        logger.info("[CRITIC] fast_fail_reason: %s", fast_fail_reason)
-    logger.info("[CRITIC] risk_flags:\n%s", json.dumps(risk_flags, indent=2))
+    if overall_fast_fail:
+        logger.info("[CRITIC] Fast-fail triggered: %s", fast_fail_reason)
+    else:
+        logger.info("[CRITIC] All top picks cleared risk review")
 
     return {"risk_flags": risk_flags, "fast_fail": overall_fast_fail, "fast_fail_reason": fast_fail_reason, "veto": overall_fast_fail, "veto_reason": fast_fail_reason}
 

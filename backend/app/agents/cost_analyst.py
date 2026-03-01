@@ -104,12 +104,9 @@ def cost_analyst_node(state: PathfinderState) -> PathfinderState:
     """
     candidates = state.get("candidate_venues", [])
 
-    logger.info("\n" + "─" * 60)
-    logger.info("[COST] ── STARTING")
-    logger.info("[COST] candidates: %d venues to price", len(candidates))
+    logger.info("[COST] Auditing prices for %d venues...", len(candidates))
 
     if not candidates:
-        logger.info("[COST] No candidates to analyze — skipping")
         return {"cost_profiles": {}}
 
     cost_profiles = {}
@@ -117,17 +114,12 @@ def cost_analyst_node(state: PathfinderState) -> PathfinderState:
         vid = venue.get("venue_id", venue.get("name", "unknown"))
         profile = _analyze_venue_cost(venue)
         cost_profiles[vid] = profile
-        logger.info("[COST] %s → price=%s | confidence=%s | value_score=%.2f  (google=%s, yelp=%s)",
-                    venue.get("name", vid),
-                    profile["price_range"],
-                    profile["confidence"],
-                    profile["value_score"],
-                    venue.get("google_price", "–"),
-                    venue.get("yelp_price", "–"))
+        price = profile["price_range"] or "unknown"
+        conf = profile["confidence"]
+        logger.info("[COST] %s — %s (%s confidence)", venue.get("name", vid), price, conf)
 
     scored = sum(1 for v in cost_profiles.values() if v.get("price_range"))
-    logger.info("[COST] ── DONE — priced %d/%d venues", scored, len(candidates))
-    logger.info("[COST] cost_profiles:\n%s", json.dumps(cost_profiles, indent=2))
+    logger.info("[COST] Priced %d of %d venues", scored, len(candidates))
 
     return {
         "cost_profiles": cost_profiles

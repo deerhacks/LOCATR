@@ -223,10 +223,9 @@ def commander_node(state: PathfinderState) -> PathfinderState:
     raw_prompt = state.get("raw_prompt", "")
     auth_user_id = state.get("auth_user_id")
 
-    logger.info("\n" + "─" * 60)
-    logger.info("[COMMANDER] ── STARTING")
-    logger.info("[COMMANDER] raw_prompt: %r", raw_prompt)
-    logger.info("[COMMANDER] auth_user_id: %s", auth_user_id or "(none)")
+    logger.info("[COMMANDER] Analyzing your request...")
+    if auth_user_id:
+        logger.info("[COMMANDER] Personalizing for your profile...")
 
     # ── Fetch Auth0 Profile if available ──
     user_profile = state.get("user_profile")
@@ -306,7 +305,7 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
     context = []
 
     try:
-        logger.info("[COMMANDER] Calling Gemini 1.5 Flash for intent parsing...")
+        logger.info("[COMMANDER] Parsing intent with Gemini...")
         response_text = asyncio.run(generate_content(prompt))
 
         # Clean up possible markdown artifacts
@@ -316,10 +315,9 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
             response_text = response_text[:-3]
 
         plan = json.loads(response_text.strip())
-        logger.info("[COMMANDER] Gemini parsing succeeded.")
 
     except Exception as e:
-        logger.warning("[COMMANDER] Gemini call failed: %s — using keyword fallback", e)
+        logger.warning("[COMMANDER] Gemini unavailable — using keyword fallback")
         plan = _keyword_fallback(raw_prompt)
 
     agent_weights = plan.get("agent_weights", {"scout": 1.0})
@@ -337,11 +335,12 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
         "user_profile": user_profile,
     }
 
-    logger.info("[COMMANDER] ── DONE ──")
-    logger.info("[COMMANDER] complexity_tier : %s", output["complexity_tier"])
-    logger.info("[COMMANDER] active_agents   : %s", output["active_agents"])
-    logger.info("[COMMANDER] agent_weights   : %s", output["agent_weights"])
-    logger.info("[COMMANDER] requires_oauth  : %s", output["requires_oauth"])
-    logger.info("[COMMANDER] parsed_intent   :\n%s", json.dumps(output["parsed_intent"], indent=2))
+    intent = output["parsed_intent"]
+    activity = intent.get("activity") or "venues"
+    location = intent.get("location") or "Toronto"
+    budget = intent.get("budget") or "any budget"
+    agents = ", ".join(a.replace("_", " ") for a in output["active_agents"])
+    logger.info("[COMMANDER] Looking for %s in %s (%s)", activity, location, budget)
+    logger.info("[COMMANDER] Activating: %s", agents)
 
     return output

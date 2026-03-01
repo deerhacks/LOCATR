@@ -72,6 +72,10 @@ const SIDEBAR_STYLES = `
     from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0);   }
   }
+  @keyframes text-shimmer {
+    0%   { background-position: 200% center; }
+    100% { background-position: -200% center; }
+  }
   .sidebar-enter {
     animation: sidebar-slide-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
@@ -82,6 +86,21 @@ const SIDEBAR_STYLES = `
     animation: group-appear 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
   .sidebar-scroll::-webkit-scrollbar { display: none; }
+  .log-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(255,255,255,0.35) 0%,
+      rgba(255,255,255,0.35) 25%,
+      rgba(255,255,255,0.92) 50%,
+      rgba(255,255,255,0.35) 75%,
+      rgba(255,255,255,0.35) 100%
+    );
+    background-size: 250% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: text-shimmer 2.4s linear infinite;
+  }
 `
 
 // ── Resize hook ───────────────────────────────────────────
@@ -116,7 +135,7 @@ function useResizable(initialWidth, minWidth = 280, maxWidth = 700) {
 
 // ── Agent log components ──────────────────────────────────
 
-function AgentGroup({ logs, color, label, isActive, isExpanded, onToggle }) {
+function AgentGroup({ logs, color, label, isActive, isExpanded, onToggle, isSearching }) {
   const scrollRef = useRef(null)
 
   useEffect(() => {
@@ -186,16 +205,19 @@ function AgentGroup({ logs, color, label, isActive, isExpanded, onToggle }) {
       {!isExpanded ? (
         <div style={{ padding: '0 12px 10px' }}>
           {latestLog && (
-            <div style={{
-              fontFamily: BODY,
-              fontWeight: 400,
-              fontSize: 13,
-              letterSpacing: '0.01em',
-              color: 'rgba(255,255,255,0.50)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}>
+            <div
+              className={isSearching ? 'log-shimmer' : ''}
+              style={{
+                color: 'rgba(255,255,255,0.50)',
+                fontFamily: BODY,
+                fontWeight: 400,
+                fontSize: 13,
+                letterSpacing: '0.01em',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {stripPrefix(latestLog.message)}
             </div>
           )}
@@ -242,6 +264,7 @@ function AgentGroup({ logs, color, label, isActive, isExpanded, onToggle }) {
             {logs.map((entry, i) => (
               <div
                 key={i}
+                className={isSearching && i === logs.length - 1 ? 'log-shimmer' : ''}
                 style={{
                   fontFamily: BODY,
                   fontWeight: 400,
@@ -263,7 +286,7 @@ function AgentGroup({ logs, color, label, isActive, isExpanded, onToggle }) {
   )
 }
 
-function LogsContent({ logs, activeAgent }) {
+function LogsContent({ logs, activeAgent, isSearching }) {
   const scrollRef = useRef(null)
   const [expanded, setExpanded] = useState({})
 
@@ -318,6 +341,7 @@ function LogsContent({ logs, activeAgent }) {
           isActive={activeAgent === group.agent}
           isExpanded={!!expanded[group.agent]}
           onToggle={() => toggleExpand(group.agent)}
+          isSearching={isSearching}
         />
       ))}
     </div>
@@ -499,6 +523,7 @@ function PersonalizationBadge({ userProfile }) {
       borderRadius: 6,
       background: 'rgba(110, 224, 110, 0.07)',
       border: '1px solid rgba(110,224,110,0.18)',
+      marginTop: 12,
     }}>
       <div style={{
         fontFamily: MONO,
@@ -771,7 +796,7 @@ export default function Sidebar({
         {/* Header */}
         <div style={{ padding: '24px 20px 12px', flexShrink: 0 }}>
           <span
-            className={!hasResults ? 'thinking-pulse' : undefined}
+            // className={!hasResults ? 'thinking-pulse' : undefined}
             style={{
               fontFamily: MONO,
               fontWeight: 400,
@@ -826,7 +851,7 @@ export default function Sidebar({
 
         {/* Content area */}
         {activeTab === 'logs' || !hasResults ? (
-          <LogsContent logs={logs} activeAgent={activeAgent} />
+          <LogsContent logs={logs} activeAgent={activeAgent} isSearching={searchState === 'searching'} />
         ) : (
           <ResultsContent
             venues={venues}

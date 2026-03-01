@@ -48,7 +48,7 @@ async def _score_venue(venue: dict, vibe_preference: str) -> dict | None:
     """Score a single venue's vibe using Gemini 2.5 Flash multimodal."""
     name = venue.get("name", "Unknown")
     photos = venue.get("photos", [])
-    logger.info("[VIBE] Scoring: %r  (photos=%d, vibe_pref=%r)", name, len(photos), vibe_preference)
+    logger.info("[VIBE] Scoring %r...", name)
 
     prompt = _VIBE_PROMPT.format(
         name=name,
@@ -76,11 +76,9 @@ async def _score_venue(venue: dict, vibe_preference: str) -> dict | None:
         cleaned = cleaned.strip()
 
         result = json.loads(cleaned)
-        logger.info("[VIBE] %r → score=%.2f | style=%s | confidence=%.2f",
-                    name,
-                    result.get("vibe_score", 0),
-                    result.get("primary_style", "?"),
-                    result.get("confidence", 0))
+        score = result.get("vibe_score", 0)
+        style = result.get("primary_style", "?")
+        logger.info("[VIBE] %s — %.0f%% match (%s)", name, score * 100, style)
         return result
     except (json.JSONDecodeError, Exception) as exc:
         logger.warning("[VIBE] Scoring failed for %r: %s", name, exc)
@@ -102,20 +100,15 @@ def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
     vibe_pref = intent.get("vibe") or _NEUTRAL_VIBE
     candidates = state.get("candidate_venues", [])
 
-    logger.info("\n" + "─" * 60)
-    logger.info("[VIBE] ── STARTING")
-    logger.info("[VIBE] vibe_preference : %r", vibe_pref)
-    logger.info("[VIBE] candidates      : %d venues to score", len(candidates))
+    logger.info("[VIBE] Matching vibe: %s", vibe_pref)
+    logger.info("[VIBE] Scoring %d venues with Gemini...", len(candidates))
 
     if not candidates:
-        logger.info("[VIBE] No candidates to score — skipping")
         return {"vibe_scores": {}}
 
     # Score all venues concurrently
     async def _score_all():
         return await asyncio.gather(*[_score_venue(v, vibe_pref) for v in candidates])
-
-    logger.info("[VIBE] Scoring all %d venues concurrently via Gemini 2.5 Flash...", len(candidates))
     try:
         results = asyncio.run(_score_all())
     except Exception as exc:
@@ -137,14 +130,11 @@ def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
             # If the user explicitly requested a vibe (i.e. not the default neutral vibe)
             # and the score is below our threshold (0.4), filter it out.
             if vibe_pref != _NEUTRAL_VIBE and score < 0.4:
-                logger.info("[VIBE] REJECTED : %s (score=%.2f < 0.4 threshold)", venue.get('name'), score)
                 rejected_candidates.append((score, venue))
             else:
-                logger.info("[VIBE] PASSED   : %s (score=%.2f)", venue.get('name'), score)
                 passed_candidates.append(venue)
         else:
             # Graceful fallback — don't crash, just mark as unscored
-            logger.info("[VIBE] UNSCORED : %s — using fallback entry", venue.get('name'))
             vibe_scores[vid] = {
                 "vibe_score": None,
                 "primary_style": "unknown",
@@ -157,12 +147,8 @@ def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
     rejected_candidates.sort(key=lambda x: x[0], reverse=True)
     while len(passed_candidates) < 3 and rejected_candidates:
         score, venue = rejected_candidates.pop(0)
-        logger.info("[VIBE] RECOVERED: %s (score=%.2f) — restored to maintain minimum 3 options", venue.get('name'), score)
         passed_candidates.append(venue)
 
-    scored_count = sum(1 for v in vibe_scores.values() if v.get("vibe_score") is not None)
-    logger.info("[VIBE] ── DONE — scored=%d, kept=%d/%d candidates",
-                scored_count, len(passed_candidates), len(candidates))
-    logger.info("[VIBE] vibe_scores:\n%s", json.dumps(vibe_scores, indent=2))
+    logger.info("[VIBE] Kept %d of %d venues by vibe fit", len(passed_candidates), len(candidates))
 
     return {"vibe_scores": vibe_scores, "candidate_venues": passed_candidates}
