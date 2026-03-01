@@ -250,6 +250,7 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
             "address": venue.get("address", ""),
             "lat": venue.get("lat", 0.0),
             "lng": venue.get("lng", 0.0),
+            "rating": venue.get("rating"),
             "vibe_score": vibe_entry.get("vibe_score"),
             "price_range": cost_entry.get("price_range"),
             "price_confidence": cost_entry.get("confidence", "none"),

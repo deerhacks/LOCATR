@@ -65,6 +65,7 @@ async def main():
             else:
                 for venue in ranked:
                     print(f"🏆 Rank #{venue.get('rank', '?')}: \033[1m{venue.get('name')}\033[0m")
+                    print(f"   ⭐ Rating     : {venue.get('rating', 'N/A')}/5")
                     print(f"   💰 Est. Cost  : ${venue.get('cost', 'Unknown')} (Value Score: {venue.get('value_score', 0)})")
                     print(f"   ✨ Vibe Match : {venue.get('vibe_score', 0)}")
                     print(f"   📍 Accessibility: {venue.get('access_score', 0)}")
@@ -73,6 +74,15 @@ async def main():
                     print(f"\n   ⚠️ Watch out for:")
                     print(f"      {venue.get('watch_out', '')}")
                     print("-" * 50)
+                    print(json.dumps(venue, indent=2))
+                    
+            print("\n[Final Verdict JSON]")
+            verdict_json = {
+                "global_consensus": final_state.get("global_consensus"),
+                "action_request": final_state.get("action_request")
+            }
+            print(json.dumps(verdict_json, indent=2))
+
                     
             # Print any Auth0 Action Requests
             action_req = final_state.get('action_request')
