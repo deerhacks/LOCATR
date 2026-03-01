@@ -2,6 +2,8 @@
 LangGraph workflow — assembles all agent nodes into the PATHFINDER graph.
 """
 
+import logging
+
 from langgraph.graph import StateGraph, END
 import asyncio
 
@@ -13,6 +15,8 @@ from app.agents.cost_analyst import cost_analyst_node
 from app.agents.critic import critic_node
 from app.agents.synthesiser import synthesiser_node
 
+logger = logging.getLogger(__name__)
+
 
 async def parallel_analysts_node(state: PathfinderState) -> PathfinderState:
     """
@@ -21,7 +25,7 @@ async def parallel_analysts_node(state: PathfinderState) -> PathfinderState:
     If the Critic returns early with fast_fail, it overrides remaining long-running tasks.
     """
     active = state.get("active_agents", [])
-    
+
     # Define mapping of agent names to their node functions
     agent_map = {
         "vibe_matcher": vibe_matcher_node,
@@ -31,13 +35,17 @@ async def parallel_analysts_node(state: PathfinderState) -> PathfinderState:
 
     # Determine which analysts to run
     tasks = []
-    # Always spawn in thread so we don't block the async event loop with sync code
+    dispatched = []
     for name, func in agent_map.items():
         if not active or name in active:
-            # Pass a shallow copy so mutations don't corrupt the loop state if they modify `state` directly
             tasks.append(asyncio.to_thread(func, state.copy()))
+            dispatched.append(name)
+
+    logger.info("\n" + "═" * 60)
+    logger.info("[GRAPH] ── PARALLEL ANALYSTS ── dispatching: %s", dispatched)
 
     if not tasks:
+        logger.info("[GRAPH] No analysts to run — skipping parallel node")
         return {}
 
     # Run them all concurrently
@@ -45,14 +53,15 @@ async def parallel_analysts_node(state: PathfinderState) -> PathfinderState:
 
     # Merge returned state updates
     merged_state = {}
-    for res in results:
+    for name, res in zip(dispatched, results):
         if isinstance(res, Exception):
-            import logging
-            logging.getLogger(__name__).error("Parallel analyst failed: %s", res)
+            logger.error("[GRAPH] Analyst %r failed: %s", name, res)
             continue
         if isinstance(res, dict):
             merged_state.update(res)
+            logger.info("[GRAPH] Analyst %r completed ✓", name)
 
+    logger.info("[GRAPH] ── PARALLEL ANALYSTS DONE ──\n")
     return merged_state
 
 

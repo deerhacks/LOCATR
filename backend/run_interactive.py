@@ -10,11 +10,19 @@ load_dotenv()
 # Add the backend directory to python path
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Suppress excessive HTTP/API logging for a cleaner CLI experience
+# Configure logging — agent activity is visible at INFO level
+_handler = logging.StreamHandler()
+_handler.setFormatter(logging.Formatter("%(message)s"))
+logging.getLogger().addHandler(_handler)
+logging.getLogger().setLevel(logging.WARNING)
+
+# Suppress noisy HTTP/network loggers
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-# You can change this to logging.INFO if you want to see the agents' inner thoughts
-logging.getLogger("app").setLevel(logging.WARNING) 
+
+# Agent and graph nodes emit structured INFO logs — show them
+logging.getLogger("app.agents").setLevel(logging.INFO)
+logging.getLogger("app.graph").setLevel(logging.INFO)
 
 from app.graph import pathfinder_graph
 from app.models.state import PathfinderState

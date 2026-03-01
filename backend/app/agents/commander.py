@@ -222,12 +222,17 @@ def commander_node(state: PathfinderState) -> PathfinderState:
     """
     raw_prompt = state.get("raw_prompt", "")
     auth_user_id = state.get("auth_user_id")
-    
+
+    logger.info("\n" + "─" * 60)
+    logger.info("[COMMANDER] ── STARTING")
+    logger.info("[COMMANDER] raw_prompt: %r", raw_prompt)
+    logger.info("[COMMANDER] auth_user_id: %s", auth_user_id or "(none)")
+
     # ── Fetch Auth0 Profile if available ──
     user_profile = state.get("user_profile")
     if auth_user_id and not user_profile:
         if auth_user_id == "auth0|local_test" or not auth_user_id.startswith("auth0|"):
-            logger.info("Skipping Auth0 Management API lookup for simulated or non-standard user_id.")
+            logger.info("[COMMANDER] Skipping Auth0 Management API lookup for simulated/non-standard user_id — using standard profile.")
             user_profile = {"app_metadata": {"preferences": {"budget_sensitive": False, "vibe_first": True}}} # standard profile
         else:
             from app.services.auth0 import auth0_service
@@ -238,9 +243,9 @@ def commander_node(state: PathfinderState) -> PathfinderState:
                 nest_asyncio.apply()
                 user_profile = asyncio.run(auth0_service.get_user_profile(auth_user_id))
             except Exception as e:
-                logger.warning(f"Failed to fetch user profile in Commander: {e}")
+                logger.warning("[COMMANDER] Failed to fetch user profile: %s", e)
                 user_profile = {}
-    
+
     profile_context = ""
     if user_profile:
         prefs = user_profile.get("app_metadata", {}).get("preferences", {})
@@ -301,6 +306,7 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
     context = []
 
     try:
+        logger.info("[COMMANDER] Calling Gemini 1.5 Flash for intent parsing...")
         response_text = asyncio.run(generate_content(prompt))
 
         # Clean up possible markdown artifacts
@@ -310,12 +316,13 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
             response_text = response_text[:-3]
 
         plan = json.loads(response_text.strip())
+        logger.info("[COMMANDER] Gemini parsing succeeded.")
 
     except Exception as e:
-        logger.warning("Commander Gemini call failed: %s — using keyword fallback", e)
+        logger.warning("[COMMANDER] Gemini call failed: %s — using keyword fallback", e)
         plan = _keyword_fallback(raw_prompt)
 
-    return {
+    output = {
         "parsed_intent": plan.get("parsed_intent", {}),
         "complexity_tier": plan.get("complexity_tier", "tier_2"),
         "active_agents": plan.get("active_agents", ["scout"]),
@@ -323,5 +330,14 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
         "requires_oauth": plan.get("requires_oauth", False),
         "oauth_scopes": plan.get("oauth_scopes", []),
         "allowed_actions": plan.get("allowed_actions", []),
-        "user_profile": user_profile,  # Pass profile down to other agents
+        "user_profile": user_profile,
     }
+
+    logger.info("[COMMANDER] ── DONE ──")
+    logger.info("[COMMANDER] complexity_tier : %s", output["complexity_tier"])
+    logger.info("[COMMANDER] active_agents   : %s", output["active_agents"])
+    logger.info("[COMMANDER] agent_weights   : %s", output["agent_weights"])
+    logger.info("[COMMANDER] requires_oauth  : %s", output["requires_oauth"])
+    logger.info("[COMMANDER] parsed_intent   :\n%s", json.dumps(output["parsed_intent"], indent=2))
+
+    return output

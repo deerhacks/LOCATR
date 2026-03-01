@@ -7,6 +7,7 @@ the price ranges ($ to $$$$) returned by Google Places and Yelp,
 resolving conflicts appropriately.
 """
 
+import json
 import logging
 from app.models.state import PathfinderState
 
@@ -103,17 +104,30 @@ def cost_analyst_node(state: PathfinderState) -> PathfinderState:
     """
     candidates = state.get("candidate_venues", [])
 
+    logger.info("\n" + "─" * 60)
+    logger.info("[COST] ── STARTING")
+    logger.info("[COST] candidates: %d venues to price", len(candidates))
+
     if not candidates:
-        logger.info("Cost Analyst: no candidates to analyze")
+        logger.info("[COST] No candidates to analyze — skipping")
         return {"cost_profiles": {}}
 
     cost_profiles = {}
     for venue in candidates:
         vid = venue.get("venue_id", venue.get("name", "unknown"))
-        cost_profiles[vid] = _analyze_venue_cost(venue)
+        profile = _analyze_venue_cost(venue)
+        cost_profiles[vid] = profile
+        logger.info("[COST] %s → price=%s | confidence=%s | value_score=%.2f  (google=%s, yelp=%s)",
+                    venue.get("name", vid),
+                    profile["price_range"],
+                    profile["confidence"],
+                    profile["value_score"],
+                    venue.get("google_price", "–"),
+                    venue.get("yelp_price", "–"))
 
     scored = sum(1 for v in cost_profiles.values() if v.get("price_range"))
-    logger.info("Cost Analyst priced %d/%d venues", scored, len(candidates))
+    logger.info("[COST] ── DONE — priced %d/%d venues", scored, len(candidates))
+    logger.info("[COST] cost_profiles:\n%s", json.dumps(cost_profiles, indent=2))
 
     return {
         "cost_profiles": cost_profiles

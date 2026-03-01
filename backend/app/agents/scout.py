@@ -82,8 +82,13 @@ def scout_node(state: PathfinderState) -> PathfinderState:
     raw_prompt = state.get("raw_prompt", "")
     query = activity if activity else raw_prompt
 
+    logger.info("\n" + "─" * 60)
+    logger.info("[SCOUT] ── STARTING")
+    logger.info("[SCOUT] query    : %r", query)
+    logger.info("[SCOUT] location : %r", location)
+
     if not query:
-        logger.warning("Scout: no query to search — returning empty")
+        logger.warning("[SCOUT] No query to search — returning empty")
         return {"candidate_venues": []}
 
     # Run both APIs concurrently
@@ -93,22 +98,35 @@ def scout_node(state: PathfinderState) -> PathfinderState:
             search_yelp(term=query, location=location, max_results=8),
         )
 
+    logger.info("[SCOUT] Calling Google Places + Yelp in parallel...")
     try:
         google_results, yelp_results = asyncio.run(_fetch())
     except Exception as exc:
-        logger.error("Scout API calls failed: %s", exc)
+        logger.error("[SCOUT] API calls failed: %s", exc)
         google_results, yelp_results = [], []
+
+    logger.info("[SCOUT] Google Places returned %d results", len(google_results))
+    for v in google_results:
+        logger.info("[SCOUT]   google: %s (rating=%s, price=%s)", v.get("name"), v.get("rating"), v.get("price_range"))
+
+    logger.info("[SCOUT] Yelp returned %d results", len(yelp_results))
+    for v in yelp_results:
+        logger.info("[SCOUT]   yelp  : %s (rating=%s, price=%s)", v.get("name"), v.get("rating"), v.get("price_range"))
 
     # Merge all results
     all_venues = google_results + yelp_results
 
     # Deduplicate
     unique_venues = _deduplicate(all_venues)
+    logger.info("[SCOUT] After dedup: %d unique venues (removed %d duplicates)", len(unique_venues), len(all_venues) - len(unique_venues))
 
     # Cap at 10
     candidates = unique_venues[:10]
 
-    logger.info("Scout found %d candidates (%d Google, %d Yelp, %d after dedup)",
+    logger.info("[SCOUT] ── DONE — %d candidates (%d Google, %d Yelp, %d after dedup)",
                 len(candidates), len(google_results), len(yelp_results), len(unique_venues))
+    logger.info("[SCOUT] candidate_venues:\n%s",
+                "\n".join(f"  [{i+1}] {v.get('name')} | rating={v.get('rating')} | price={v.get('price_range')} | {v.get('address', '')}"
+                          for i, v in enumerate(candidates)))
 
     return {"candidate_venues": candidates}

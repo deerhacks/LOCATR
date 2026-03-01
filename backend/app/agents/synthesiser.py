@@ -187,8 +187,13 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
     4. Build ranked_results matching VenueResult schema.
     """
     candidates = state.get("candidate_venues", [])
+
+    logger.info("\n" + "─" * 60)
+    logger.info("[SYNTH] ── STARTING")
+    logger.info("[SYNTH] candidates   : %d", len(candidates))
+
     if not candidates:
-        logger.info("Synthesiser: no candidates to rank")
+        logger.info("[SYNTH] No candidates to rank — skipping")
         return {"ranked_results": []}
 
     vibe_scores = state.get("vibe_scores") or {}
@@ -196,25 +201,39 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
     risk_flags = state.get("risk_flags") or {}
     agent_weights = state.get("agent_weights") or {}
     raw_prompt = state.get("raw_prompt", "")
-    
+
     requires_oauth = state.get("requires_oauth", False)
     allowed_actions = state.get("allowed_actions", [])
     oauth_scopes = state.get("oauth_scopes", [])
 
+    logger.info("[SYNTH] agent_weights : %s", agent_weights)
+    logger.info("[SYNTH] vibe_scores   : %d entries", len(vibe_scores))
+    logger.info("[SYNTH] cost_profiles : %d entries", len(cost_profiles))
+    logger.info("[SYNTH] risk_flags    : %d entries", len(risk_flags))
+
     # Step 1: Score all venues
     scored = []
+    logger.info("[SYNTH] Computing composite scores...")
     for venue in candidates:
         vid = venue.get("venue_id", venue.get("name", "unknown"))
         composite = _compute_composite_score(
             vid, vibe_scores, cost_profiles, risk_flags, agent_weights
         )
         scored.append((composite, venue, vid))
+        logger.info("[SYNTH]   %s → composite=%.3f  (vibe=%s, cost=%s, risks=%d)",
+                    venue.get("name", vid),
+                    composite,
+                    vibe_scores.get(vid, {}).get("vibe_score", "–"),
+                    cost_profiles.get(vid, {}).get("price_range", "–"),
+                    len(risk_flags.get(vid, [])))
 
     # Step 2: Sort by score descending
     scored.sort(key=lambda x: x[0], reverse=True)
+    logger.info("[SYNTH] Ranking order: %s", [v.get("name") for _, v, _ in scored])
 
     # Step 3: Generate explanations for top 3
     top_venues = scored[:3]
+    logger.info("[SYNTH] Generating Gemini explanations for top %d venues...", len(top_venues))
 
     async def _explain_all():
         return await asyncio.gather(*[
@@ -235,7 +254,7 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
         nest_asyncio.apply()
         explanations = asyncio.run(_explain_all())
     except Exception as exc:
-        logger.error("Synthesis explanations failed: %s", exc)
+        logger.error("[SYNTH] Explanation generation failed: %s", exc)
         explanations = [{"why": "", "watch_out": ""} for _ in top_venues]
 
     # Step 4: Build ranked_results
@@ -244,7 +263,7 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
         vibe_entry = vibe_scores.get(vid, {})
         cost_entry = cost_profiles.get(vid, {})
 
-        ranked_results.append({
+        result = {
             "rank": rank,
             "name": venue.get("name", "Unknown"),
             "address": venue.get("address", ""),
@@ -256,17 +275,21 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
             "price_confidence": cost_entry.get("confidence", "none"),
             "why": explanation.get("why", ""),
             "watch_out": explanation.get("watch_out", ""),
-        })
-
-    logger.info("Synthesiser ranked %d venues (top 3 explained)", len(scored))
+        }
+        ranked_results.append(result)
+        logger.info("[SYNTH] #%d %s — score=%.3f | why: %s",
+                    rank, result["name"], composite, result["why"][:80] + "..." if len(result.get("why","")) > 80 else result.get("why",""))
 
     # Step 5: Generate Global Consensus
+    logger.info("[SYNTH] Generating global consensus via Gemini...")
     try:
         consensus_text, email_draft = asyncio.run(_generate_global_consensus(top_venues, raw_prompt))
     except RuntimeError:
         import nest_asyncio
         nest_asyncio.apply()
         consensus_text, email_draft = asyncio.run(_generate_global_consensus(top_venues, raw_prompt))
+
+    logger.info("[SYNTH] global_consensus: %s", consensus_text[:120] + "..." if len(consensus_text) > 120 else consensus_text)
 
     action_request = None
     if requires_oauth and "send_email" in allowed_actions:
@@ -276,6 +299,10 @@ def synthesiser_node(state: PathfinderState) -> PathfinderState:
             "scopes": ["email.send"],
             "draft": email_draft
         }
+        logger.info("[SYNTH] action_request created: oauth_consent for email.send")
+
+    logger.info("[SYNTH] ── DONE — ranked %d venues (top 3 explained)", len(scored))
+    logger.info("[SYNTH] ranked_results:\n%s", json.dumps(ranked_results, indent=2))
 
     return {
         "ranked_results": ranked_results,
