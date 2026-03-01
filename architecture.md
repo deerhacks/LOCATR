@@ -159,12 +159,12 @@ Any agent that does not depend on another agent's output must run in parallel. T
 ### Node 3: The VIBE MATCHER (Qualitative Node)
 
 **Status:** ✅ Implemented
-- **Multimodal Scoring:** Sends venue photos + metadata to Gemini for aesthetic analysis.
+- **Multimodal Scoring:** Sends venue photos + metadata to Gemini 2.5 Flash for aesthetic analysis.
 - **Concurrent Processing:** Scores all candidates in parallel via `asyncio.gather()`.
 - **Graceful Fallback:** Venues that fail scoring get a neutral `score: null, confidence: 0.0` entry instead of crashing.
 
 **Role:** Aesthetic and subjective reasoning engine.
-**Model:** Gemini 1.5 Pro (Multimodal)
+**Model:** Gemini 2.5 Flash (Multimodal)
 
 **Responsibilities:**
 
@@ -626,13 +626,52 @@ Knowledge memory and long-term risk logging.
 
 
 
+## 📋 Persistent Logging
+
+All agent nodes emit structured, prefixed log messages at `INFO` level. Logs are visible in the CLI runner (`run_interactive.py`) and any environment where the `app.agents` and `app.graph` loggers are set to `INFO`.
+
+### Log Format
+
+Each agent opens with a separator line and a `[AGENT] ── STARTING` header, logs key inputs and intermediate steps, then closes with a `[AGENT] ── DONE` footer that dumps the full structured output.
+
+| Logger prefix | Source |
+|---------------|--------|
+| `[COMMANDER]` | `app.agents.commander` |
+| `[SCOUT]` | `app.agents.scout` |
+| `[VIBE]` | `app.agents.vibe_matcher` |
+| `[COST]` | `app.agents.cost_analyst` |
+| `[CRITIC]` | `app.agents.critic` |
+| `[SYNTH]` | `app.agents.synthesiser` |
+| `[GRAPH]` | `app.graph` (parallel analyst dispatch) |
+
+### Log Levels
+
+| Logger | Level set in `run_interactive.py` |
+|--------|-----------------------------------|
+| `app.agents.*` | `INFO` |
+| `app.graph` | `INFO` |
+| `httpx` / `httpcore` | `WARNING` (suppressed) |
+| Root logger | `WARNING` |
+
+### What Gets Logged Per Agent
+
+- **Commander:** raw prompt, Auth0 lookup, Gemini call start/success/fallback, full parsed intent + tier + weights
+- **Scout:** query + location, Google Places and Yelp raw results per venue, dedup count, final candidate list
+- **Vibe Matcher:** vibe preference, per-venue score/style/confidence, PASSED / REJECTED / RECOVERED / UNSCORED status, full `vibe_scores` dump
+- **Cost Analyst:** per-venue price range + confidence + value score, final `cost_profiles` dump
+- **Critic:** venues under review, weather + event fetch per venue, per-venue risk list with severity, fast-fail decision, full `risk_flags` dump
+- **Synthesiser:** composite score per venue, ranking order, explanation generation, global consensus preview, final `ranked_results` dump
+- **Graph:** which analysts are dispatched in parallel, per-analyst completion status
+
+---
+
 ## 🧠 Model Summary
 
 | Node | Model / Tooling | Purpose |
 |------|----------------|---------|
 | Commander | Gemini 1.5 Flash | Intent parsing, complexity tiering, dynamic agent activation & weighting |
 | Scout | Google Places API, Yelp Fusion | Venue discovery and raw metadata collection |
-| Vibe Matcher | Gemini 1.5 Pro (Multimodal) | Aesthetic, photo-based, and sentiment-driven vibe analysis |
+| Vibe Matcher | Gemini 2.5 Flash (Multimodal) | Aesthetic, photo-based, and sentiment-driven vibe analysis |
 | Cost Analyst | None (Heuristic) | Price signal normalization |
 | Crowd Analyst *(optional)* | Google Places Reviews, Yelp Reviews | Review aggregation, competitor density, social proof scoring |
 | Critic | Gemini (Adversarial Reasoning) + OpenWeather, PredictHQ | Failure detection, risk forecasting, veto logic |
