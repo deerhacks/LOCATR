@@ -6,6 +6,7 @@ merges + deduplicates, and enriches with Snowflake intelligence.
 
 import asyncio
 import logging
+import time
 from math import radians, cos, sin, asin, sqrt
 
 from app.models.state import PathfinderState
@@ -13,6 +14,7 @@ from app.services.google_places import search_places
 from app.services.yelp import search_yelp
 import os
 from app.services.snowflake import SnowflakeIntelligence
+from app.services.cache import search_cache
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,7 @@ async def scout_node(state: PathfinderState) -> PathfinderState:
     4. Cap at 10 results.
     5. Return updated state with candidate_venues.
     """
+    start_time = time.perf_counter()
     intent = state.get("parsed_intent", {})
 
     # Build search query from intent fields
@@ -88,15 +91,27 @@ async def scout_node(state: PathfinderState) -> PathfinderState:
 
     if not query:
         logger.warning("[SCOUT] No query to search — returning empty")
+        logger.info("[SCOUT] Node Complete in %.2fs", time.perf_counter() - start_time)
         return {"candidate_venues": []}
+
+    # ── Check Cache ──
+    cache_key = f"scout:{query}:{location}".lower()
+    cached = search_cache.get(cache_key)
+    if cached:
+        logger.info("[SCOUT] ⚡️ CACHE HIT for '%s' in %s", query, location)
+        logger.info("[SCOUT] Node Complete in %.2fs", time.perf_counter() - start_time)
+        return {"candidate_venues": cached}
 
     # Run both APIs concurrently - using native await instead of asyncio.run
     logger.info("[SCOUT] Querying Google Places + Yelp simultaneously...")
+    api_start = time.perf_counter()
     try:
         google_results, yelp_results = await asyncio.gather(
             search_places(query=query, location=location, max_results=8),
             search_yelp(term=query, location=location, max_results=8),
         )
+        logger.info("[SCOUT] API Fetch took %.2fs (Google: %d, Yelp: %d)",
+                    time.perf_counter() - api_start, len(google_results), len(yelp_results))
     except Exception as exc:
         logger.error("[SCOUT] API calls failed: %s", exc)
         google_results, yelp_results = [], []
@@ -104,6 +119,7 @@ async def scout_node(state: PathfinderState) -> PathfinderState:
     logger.info("[SCOUT] Google returned %d, Yelp returned %d", len(google_results), len(yelp_results))
 
     # Merge all results
+    merge_dedup_start = time.perf_counter()
     all_venues = google_results + yelp_results
 
     # After deduplication
@@ -114,8 +130,10 @@ async def scout_node(state: PathfinderState) -> PathfinderState:
 
     # Cap at 10
     candidates = unique_venues[:10]
-    
+    logger.info("[SCOUT] Merge & Deduplication took %.2fs", time.perf_counter() - merge_dedup_start)
+
     # ── Inject Historical Risks (OPTIMIZED BATCH CALL) ──
+    sf_start = time.perf_counter()
     try:
         sf = SnowflakeIntelligence()
         # Fetch all risks in one single query
@@ -144,5 +162,8 @@ async def scout_node(state: PathfinderState) -> PathfinderState:
     logger.info("[SCOUT] candidate_venues:\n%s",
                 "\n".join(f"  [{i+1}] {v.get('name')} | rating={v.get('rating')} | price={v.get('price_range')} | hist_risks={len(v.get('historical_risks',[]))} | {v.get('address', '')}"
                           for i, v in enumerate(candidates)))
+
+    # ── Save to Cache ──
+    search_cache.set(cache_key, candidates)
 
     return {"candidate_venues": candidates}

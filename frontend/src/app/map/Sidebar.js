@@ -497,23 +497,54 @@ function VenueCard({ venue, rankIdx, isSelected, onSelect }) {
           letterSpacing: '0.01em',
           color: venue.has_historical_risk ? '#ff4d4d' : '#e0a060',
           marginTop: 8,
-          padding: venue.has_historical_risk ? '8px 12px' : '0 0 0 32px',
-          background: venue.has_historical_risk ? 'rgba(255, 77, 77, 0.1)' : 'transparent',
+          padding: venue.has_historical_risk ? '10px 14px' : '0 0 0 32px',
+          background: venue.has_historical_risk ? 'rgba(255, 77, 77, 0.08)' : 'transparent',
           borderLeft: venue.has_historical_risk ? '3px solid #ff4d4d' : 'none',
-          borderRadius: venue.has_historical_risk ? 4 : 0,
+          borderRadius: venue.has_historical_risk ? 6 : 0,
+          border: venue.has_historical_risk ? '1px solid rgba(255, 77, 77, 0.15)' : 'none',
         }}>
           <div style={{
             fontFamily: MONO,
             fontSize: 11,
             fontWeight: 600,
-            letterSpacing: '0.1em',
-            marginBottom: 4,
+            letterSpacing: '0.12em',
+            marginBottom: venue.has_historical_risk ? 6 : 4,
             color: venue.has_historical_risk ? '#ff4d4d' : '#e0a060',
-            textTransform: 'uppercase'
+            textTransform: 'uppercase',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6
           }}>
-            {venue.has_historical_risk ? '⚠️ SAFETY VETO' : 'Watch Out'}
+            {venue.has_historical_risk ? (
+              <>
+                <span style={{ fontSize: 14 }}>⚠️</span>
+                <span>SAFETY VETO: HISTORICAL RISK</span>
+              </>
+            ) : (
+              'Watch Out'
+            )}
           </div>
-          {venue.watch_out}
+
+          <div style={{ lineHeight: 1.5 }}>
+            {venue.watch_out}
+          </div>
+
+          {venue.historical_vetoes && venue.historical_vetoes.length > 0 && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,77,77,0.1)' }}>
+              {venue.historical_vetoes.map((risk, idx) => (
+                <div key={idx} style={{
+                  fontSize: 12,
+                  color: 'rgba(255,77,77,0.8)',
+                  display: 'flex',
+                  gap: 6,
+                  marginBottom: 4
+                }}>
+                  <span style={{ opacity: 0.5 }}>•</span>
+                  {risk}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

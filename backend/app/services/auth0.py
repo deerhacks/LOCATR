@@ -113,7 +113,12 @@ class Auth0Service:
                 # Find the requested identity provider
                 for ext_id in identities:
                     if ext_id.get("provider") == provider:
-                        return ext_id.get("access_token")
+                        at = ext_id.get("access_token")
+                        if at:
+                            logger.info(f"[AUTH0] Successfully retrieved {provider} token (len={len(at)}, starts with {at[:10]}...)")
+                        else:
+                            logger.warning(f"[AUTH0] Identity for {provider} found, but NO access_token present.")
+                        return at
                         
                 logger.warning(f"No active {provider} identity found for {user_id}")
                 return None
@@ -129,7 +134,7 @@ class Auth0Service:
         if not all([self.domain, self.client_id, self.client_secret]):
             return None
             
-        url = f"https://{self.domain}/oauth/bc-authorize"
+        url = f"https://{self.domain}/bc-authorize"
         payload = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
@@ -219,7 +224,12 @@ class Auth0Service:
                 return True
                 
         except httpx.HTTPError as he:
-            logger.error(f"HTTP Error sending Gmail: {he.response.text if hasattr(he, 'response') else he}")
+            status = he.response.status_code if hasattr(he, "response") else "unknown"
+            body = he.response.text if hasattr(he, "response") else str(he)
+            logger.error(f"[GMAIL] HTTP {status} Error: {body}")
+            
+            if status == 401:
+                logger.error("[GMAIL] 💡 TROUBLESHOOTING: This 401 usually means the Google Token is EXPIRED or MISSING 'https://www.googleapis.com/auth/gmail.send' scope. The user needs to log out and back in.")
             return False
         except Exception as e:
             logger.error(f"Failed to send automated Gmail: {e}")

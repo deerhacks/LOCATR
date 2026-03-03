@@ -44,6 +44,8 @@ class VenueResult(BaseModel):
     price_confidence: Optional[str] = None
     why: str = ""
     watch_out: str = ""
+    historical_vetoes: List[str] = Field(default_factory=list)
+    has_historical_risk: bool = False
 
 
 class PlanResponse(BaseModel):

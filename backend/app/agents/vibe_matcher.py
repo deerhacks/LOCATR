@@ -7,9 +7,11 @@ Scores each venue's vibe against the user's desired aesthetic.
 import asyncio
 import json
 import logging
+import time
 
 from app.models.state import PathfinderState
 from app.services.gemini import generate_content
+from app.services.cache import search_cache
 
 logger = logging.getLogger(__name__)
 
@@ -45,120 +47,127 @@ Example: [0.9, 0.1, 0.4, ...]
 _NEUTRAL_VIBE = "a welcoming, enjoyable atmosphere suitable for groups"
 
 
-async def _score_venue(venue: dict, vibe_preference: str) -> dict | None:
-    """Score a single venue's vibe using Gemini 2.5 Flash multimodal."""
-    name = venue.get("name", "Unknown")
-    photos = venue.get("photos", [])
-    logger.info("[VIBE] Scoring %r...", name)
+_VIBE_BATCH_PROMPT = f"""You are a spatial aesthetic analyst. Analyze the following list of venues based on their metadata and provided photos.
+Assign a score from 0.0 to 1.0 for each of the following {len(VIBE_KEYWORDS)} dimensions for EACH venue:
+{", ".join(VIBE_KEYWORDS)}
 
-    prompt = _VIBE_PROMPT.format(
-        name=name,
-        address=venue.get("address", ""),
-        category=venue.get("category", "")
-    )
+For each venue, you will be provided with its name, address, and category.
+If photos are provided, they will be labeled with the venue name.
 
-    try:
-        raw = await generate_content(
-            prompt=prompt,
-            model="gemini-2.5-flash",
-            image_urls=photos if photos else None,
-        )
-        if not raw:
-            logger.warning("[VIBE] Empty response for %r", name)
-            return None
+OUTPUT FORMAT:
+Return ONLY a JSON object where keys are the VENUE_IDs provided and values are JSON arrays of {len(VIBE_KEYWORDS)} floats.
+Example: 
+{{
+  "venue_id_1": [0.9, 0.1, ...],
+  "venue_id_2": [0.4, 0.8, ...]
+}}
 
-        # Strip markdown fences if Gemini wraps the JSON
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[-1]
-        if cleaned.endswith("```"):
-            cleaned = cleaned.rsplit("```", 1)[0]
-        cleaned = cleaned.strip()
-
-        # The result is now expected to be a list of 52 floats
-        result = json.loads(cleaned)
-        if not isinstance(result, list) or len(result) != len(VIBE_KEYWORDS):
-            logger.warning("[VIBE] Expected list of %s floats, got %s of length %s", len(VIBE_KEYWORDS), type(result), len(result) if isinstance(result, list) else 0)
-            return None
-        
-        # We will package it in a dict to match the rest of the code structure
-        output = {
-            "vibe_score": result[0],  # Give it a generic score for the overall filtering
-            "vibe_dimensions": result,
-            "primary_style": vibe_preference,
-            "confidence": 1.0
-        }
-        
-        logger.info("[VIBE] %r → scored %s dimensions", name, len(VIBE_KEYWORDS))
-        return output
-    except (json.JSONDecodeError, Exception) as exc:
-        logger.warning("[VIBE] Scoring failed for %r: %s", name, exc)
-        return None
-
+Venues to analyze:
+{{venues_text}}
+"""
 
 async def vibe_matcher_node(state: PathfinderState) -> PathfinderState:
     """
     Score each candidate venue on subjective vibe / aesthetic match.
-
-    Steps
-    -----
-    1. Get vibe preference from parsed_intent (or use neutral default).
-    2. For each candidate, call Gemini 2.5 Flash with photos + prompt.
-    3. Parse JSON response into vibe scores.
-    4. Write vibe_scores dict to state.
+    BATCHED VERSION: Sends all venues to Gemini in one call to reduce latency.
     """
+    start_time = time.perf_counter()
     intent = state.get("parsed_intent", {})
     vibe_pref = intent.get("vibe") or _NEUTRAL_VIBE
     candidates = state.get("candidate_venues", [])
 
     logger.info("[VIBE] Matching vibe: %s", vibe_pref)
-    logger.info("[VIBE] Scoring %d venues with Gemini...", len(candidates))
+    logger.info("[VIBE] Scoring %d venues with SINGLE BATCH Gemini call...", len(candidates))
 
     if not candidates:
         return {"vibe_scores": {}}
 
-    # Score all venues concurrently
-    try:
-        results = await asyncio.gather(*[_score_venue(v, vibe_pref) for v in candidates])
-    except Exception as exc:
-        logger.error("[VIBE] Batch scoring failed: %s", exc)
-        results = [None] * len(candidates)
+    # ── Check Cache ──
+    vids_sorted = sorted([v.get("venue_id", v.get("name", "")) for v in candidates])
+    cache_key = f"vibe:{vibe_pref}:" + "|".join(vids_sorted)
+    cached = search_cache.get(cache_key)
+    if cached:
+        logger.info("[VIBE] ⚡️ CACHE HIT for candidate set")
+        return cached
 
-    # Build vibe_scores dict keyed by venue_id and filter candidates
-    vibe_scores = {}
-    passed_candidates = []
-    
-    rejected_candidates = []
-    
-    for venue, result in zip(candidates, results):
-        vid = venue.get("venue_id", "")
-        if result:
-            vibe_scores[vid] = result
-            score = result.get("vibe_score", 0.5)
+    # Prepare Batch Prompt
+    venues_text = ""
+    batch_images = []
+
+    for v in candidates:
+        vid = v.get("venue_id", v.get("name", "unknown"))
+        venues_text += f"ID: {vid}\nName: {v.get('name')}\nAddress: {v.get('address')}\nCategory: {v.get('category')}\n---\n"
+        
+        # Add first 2 photos per venue to avoid hitting payload limits while keeping visual context
+        v_photos = v.get("photos", [])[:2]
+        batch_images.extend(v_photos)
+
+    prompt = _VIBE_BATCH_PROMPT.format(venues_text=venues_text)
+
+    logger.info("[VIBE] Dispatching Gemini batch call (Photos: %d)...", len(batch_images))
+    gemini_start = time.perf_counter()
+    try:
+        raw = await generate_content(
+            prompt=prompt,
+            model="gemini-2.5-flash",
+            image_urls=batch_images if batch_images else None,
+        )
+        logger.info("[VIBE] Gemini batch call took %.2fs", time.perf_counter() - gemini_start)
+        
+        # Clean JSON
+        cleaned = raw.strip()
+        if cleaned.startswith("```json"): cleaned = cleaned[7:]
+        elif cleaned.startswith("```"): cleaned = cleaned[3:]
+        if cleaned.endswith("```"): cleaned = cleaned[:-3]
+        
+        batch_results = json.loads(cleaned.strip())
+        
+        vibe_scores = {}
+        passed_candidates = []
+        rejected_candidates = []
+
+        for venue in candidates:
+            vid = venue.get("venue_id", venue.get("name", "unknown"))
+            result_list = batch_results.get(vid)
             
-            # If the user explicitly requested a vibe (i.e. not the default neutral vibe)
-            # and the score is below our threshold (0.4), filter it out.
-            if vibe_pref != _NEUTRAL_VIBE and score < 0.4:
-                rejected_candidates.append((score, venue))
+            if result_list and isinstance(result_list, list) and len(result_list) == len(VIBE_KEYWORDS):
+                score = result_list[0]
+                res_dict = {
+                    "vibe_score": score,
+                    "vibe_dimensions": result_list,
+                    "primary_style": vibe_pref,
+                    "confidence": 1.0
+                }
+                vibe_scores[vid] = res_dict
+                
+                if vibe_pref != _NEUTRAL_VIBE and score < 0.4:
+                    rejected_candidates.append((score, venue))
+                else:
+                    passed_candidates.append(venue)
             else:
+                # Fallback for individual venue failure within batch
+                logger.warning("[VIBE] Missing or invalid results for %s in batch", vid)
+                vibe_scores[vid] = {
+                    "vibe_score": 0.5,
+                    "vibe_dimensions": [0.5] * len(VIBE_KEYWORDS),
+                    "primary_style": "unknown",
+                    "confidence": 0.0
+                }
                 passed_candidates.append(venue)
-        else:
-            # Graceful fallback — don't crash, just mark as unscored
-            vibe_scores[vid] = {
-                "vibe_score": None,
-                "vibe_dimensions": [0.0] * len(VIBE_KEYWORDS),
-                "primary_style": "unknown",
-                "visual_descriptors": [],
-                "confidence": 0.0,
-            }
+
+        # Ensure at least 3
+        rejected_candidates.sort(key=lambda x: x[0], reverse=True)
+        while len(passed_candidates) < 3 and rejected_candidates:
+            score, venue = rejected_candidates.pop(0)
             passed_candidates.append(venue)
 
-    # Backup mechanism: ensure we pass at least 3 venues if Scout provided enough.
-    rejected_candidates.sort(key=lambda x: x[0], reverse=True)
-    while len(passed_candidates) < 3 and rejected_candidates:
-        score, venue = rejected_candidates.pop(0)
-        passed_candidates.append(venue)
+        logger.info("[VIBE] Node Complete in %.2fs (Kept %d of %d)", 
+                    time.perf_counter() - start_time, len(passed_candidates), len(candidates))
+        
+        result_to_cache = {"vibe_scores": vibe_scores, "candidate_venues": passed_candidates}
+        search_cache.set(cache_key, result_to_cache)
+        return result_to_cache
 
-    logger.info("[VIBE] Kept %d of %d venues by vibe fit", len(passed_candidates), len(candidates))
-
-    return {"vibe_scores": vibe_scores, "candidate_venues": passed_candidates}
+    except Exception as exc:
+        logger.error("[VIBE] Batch Gemini call failed: %s", exc)
+        return {"vibe_scores": {}, "candidate_venues": candidates[:3]}

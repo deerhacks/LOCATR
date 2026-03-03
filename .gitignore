@@ -29,4 +29,5 @@ Thumbs.db
 # Test Output
 *.txt
 
+*.log
 /thoughts

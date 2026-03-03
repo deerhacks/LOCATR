@@ -9,6 +9,7 @@ resolving conflicts appropriately.
 
 import json
 import logging
+import time
 from app.models.state import PathfinderState
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ async def cost_analyst_node(state: PathfinderState) -> PathfinderState:
     """
     Compute price normalization per venue.
     """
+    start_time = time.perf_counter()
     candidates = state.get("candidate_venues", [])
 
     logger.info("[COST] Auditing prices for %d venues...", len(candidates))
@@ -121,6 +123,7 @@ async def cost_analyst_node(state: PathfinderState) -> PathfinderState:
     scored = sum(1 for v in cost_profiles.values() if v.get("price_range"))
     logger.info("[COST] Priced %d of %d venues", scored, len(candidates))
 
+    logger.info("[COST] Node Complete in %.2fs", time.perf_counter() - start_time)
     return {
         "cost_profiles": cost_profiles
     }

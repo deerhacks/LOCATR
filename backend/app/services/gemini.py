@@ -48,23 +48,28 @@ async def generate_content(
 
     # Add images if provided (multimodal)
     if image_urls:
-        for img_url in image_urls[:3]:  # limit to 3 images to stay frugal
-            try:
-                async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            async def _fetch_and_encode_image(img_url: str):
+                try:
                     img_resp = await client.get(img_url)
                     img_resp.raise_for_status()
                     import base64
                     img_b64 = base64.b64encode(img_resp.content).decode("utf-8")
-                    # Detect content type
                     content_type = img_resp.headers.get("content-type", "image/jpeg")
-                    parts.append({
+                    return {
                         "inline_data": {
                             "mime_type": content_type,
                             "data": img_b64,
                         }
-                    })
-            except Exception as exc:
-                logger.warning("Failed to fetch image %s: %s", img_url, exc)
+                    }
+                except Exception as exc:
+                    logger.warning("Failed to fetch image %s: %s", img_url, exc)
+                    return None
+
+            image_tasks = [_fetch_and_encode_image(url) for url in image_urls[:15]]
+            image_parts = await asyncio.gather(*image_tasks)
+            parts.extend([p for p in image_parts if p])
+
 
     # Add text prompt
     parts.append({"text": prompt})

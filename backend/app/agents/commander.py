@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import asyncio
+import time
 
 from app.models.state import PathfinderState
 from app.services.gemini import generate_content
@@ -206,118 +207,71 @@ def _apply_user_profile_weights(
 
 # ── Main node entry point ─────────────────────────────────────────────
 
-def commander_node(state: PathfinderState) -> PathfinderState:
+async def commander_node(state: PathfinderState) -> PathfinderState:
     """
     Parse the raw user prompt into a structured execution plan.
-
-    Steps
-    -----
-    1. Check Auth0 identity and load user profile metadata.
-    2. Call Gemini 1.5 Flash to classify intent & extract parameters.
-    3. Determine complexity tier (quick / full / adversarial).
-    4. Compute dynamic agent weights based on keywords and user profile.
-    5. Return updated state with parsed_intent, complexity_tier, agent_weights, user_profile.
-
-    Fallback: If Gemini is unavailable, use keyword-based heuristics.
     """
+    start_time = time.perf_counter()
     raw_prompt = state.get("raw_prompt", "")
     auth_user_id = state.get("auth_user_id")
 
-    logger.info("[COMMANDER] Analyzing your request...")
-    if auth_user_id:
-        logger.info("[COMMANDER] Personalizing for your profile...")
+    logger.info("[COMMANDER] Analyzing request...")
 
-    # ── Fetch Auth0 Profile if available ──
+    # ── Fetch Auth0 Profile ──
     user_profile = state.get("user_profile")
     if auth_user_id and not user_profile:
         if auth_user_id == "auth0|local_test":
-            logger.info("[COMMANDER] Skipping Auth0 Management API lookup for local test user.")
             user_profile = {}
         else:
             from app.services.auth0 import auth0_service
             try:
-                user_profile = asyncio.run(auth0_service.get_user_profile(auth_user_id))
-            except RuntimeError:
-                import nest_asyncio
-                nest_asyncio.apply()
-                user_profile = asyncio.run(auth0_service.get_user_profile(auth_user_id))
+                user_profile = await auth0_service.get_user_profile(auth_user_id)
             except Exception as e:
-                logger.warning("[COMMANDER] Failed to fetch user profile: %s", e)
+                logger.warning("[COMMANDER] Profile fetch failed: %s", e)
                 user_profile = {}
 
     profile_context = ""
     if user_profile:
         prefs = user_profile.get("app_metadata", {}).get("preferences", {})
         if prefs:
-            profile_context = f"\nUser Preferences Context: {json.dumps(prefs)}\nAdjust agent weights to favor these preferences."
+            profile_context = f"\nUser Prefs: {json.dumps(prefs)}"
 
-    prompt = f"""You are the PATHFINDER Commander. Your first task is to establish the Execution Context.
+    prompt = f"""You are the PATHFINDER Commander. Parse this request into a JSON execution plan.
+Query: "{raw_prompt}"{profile_context}
 
-OAUTH & IDENTITY LOGIC:
-Check the user_id. If it is auth0|local_test or looks simulated, set identity_context to "standard_profile".
-Do NOT request a Management API lookup if the user_id does not follow the auth0|{{id}} format.
-Annotate the plan with requires_auth: false if the user is just looking for public cafes.
+Tiers: tier_1 (simple), tier_2 (multi-factor), tier_3 (research/business).
+Agents: ["scout", "vibe_matcher", "cost_analyst", "critic"]. Scout is mandatory.
+Rules: 
+- vibe_matcher: Only if aesthetic/vibe/atmosphere is mentioned.
+- cost_analyst: Skip if purely aesthetic and no booking requested.
 
-COMPLEXITY TIERING:
-For "Cyberpunk Cafe", activate: SCOUT, VIBE, ACCESS, CRITIC.
-Note: Skip COST if the intent is purely aesthetic and no booking is requested to save time.
+Output JSON:
+{{
+  "parsed_intent": {{"activity": "...", "group_size": 1, "budget": "medium", "location": "Toronto", "vibe": "..."}},
+  "complexity_tier": "tier_2",
+  "active_agents": ["scout", ...],
+  "agent_weights": {{"scout": 1.0, ...}},
+  "requires_oauth": false,
+  "oauth_scopes": [],
+  "allowed_actions": [],
+  "identity_context": "standard_profile"
+}}"""
 
-    Query: "{raw_prompt}"{profile_context}
-    
-    Determine:
-    1. Intent parameters (activity, group_size, budget, location, vibe).
-    2. Complexity Tier:
-       - 'tier_1': Simple lookup (Scout only or light analysis)
-       - 'tier_2': Multi-factor personal (Group activity, constraints -> Scout, Cost, Access, Critic, maybe Vibe)
-       - 'tier_3': Strategic/Business (Deep research -> all 5 agents)
-    3. Active Agents: List the agents to activate from: ["scout", "vibe_matcher", "cost_analyst", "critic"]. Scout is always mandatory.
-       IMPORTANT: DO NOT activate "vibe_matcher" unless the user's query specifically mentions aesthetics, vibes, beauty, theme, or atmosphere. For all other queries, omit it.
-       IMPORTANT: Skip "cost_analyst" if the intent is purely aesthetic and no booking is requested.
-    4. Agent Weights: Assign a float (0.0 to 1.0) to each activated agent indicating its importance.
-    5. OAuth Requirements: Detect if this request requires acting on behalf of the user (e.g., booking, sending an email, checking a calendar).
-       - If yes, set "requires_oauth": true, and list the "oauth_scopes" (e.g., "email.send", "calendar.read") and "allowed_actions" (e.g., "send_email", "check_availability").
-       - If no, set "requires_oauth": false, and leave arrays empty.
-    
-    Output exactly in this JSON format:
-    {{
-      "parsed_intent": {{
-        "activity": "...",
-        "group_size": 10,
-        "budget": "low",
-        "location": "west end",
-        "vibe": "..."
-      }},
-      "complexity_tier": "tier_2",
-      "active_agents": ["scout", "cost_analyst", "critic"],
-      "agent_weights": {{
-        "scout": 1.0,
-        ...
-      }},
-      "requires_oauth": false,
-      "oauth_scopes": [],
-      "allowed_actions": [],
-      "identity_context": "standard_profile"
-    }}
-    Do not output markdown code blocks. Only the raw JSON string.
-    """
-
-    plan = None
-    context = []
-
+    logger.info("[COMMANDER] Dispatching Gemini parsing...")
+    gemini_start = time.perf_counter()
     try:
-        logger.info("[COMMANDER] Parsing intent with Gemini...")
-        response_text = asyncio.run(generate_content(prompt))
+        response_text = await generate_content(prompt, model="gemini-2.5-flash")
+        logger.info("[COMMANDER] Gemini parsing took %.2fs", time.perf_counter() - gemini_start)
 
-        # Clean up possible markdown artifacts
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
+        # Clean up markdown
+        cleaned = response_text.strip()
+        if cleaned.startswith("```json"): cleaned = cleaned[7:]
+        elif cleaned.startswith("```"): cleaned = cleaned[3:]
+        if cleaned.endswith("```"): cleaned = cleaned[:-3]
 
-        plan = json.loads(response_text.strip())
-
+        plan = json.loads(cleaned.strip())
     except Exception as e:
-        logger.warning("[COMMANDER] Gemini unavailable — using keyword fallback")
+        logger.warning("[COMMANDER] Gemini failed, using fallback: %s", e)
         plan = _keyword_fallback(raw_prompt)
 
     agent_weights = plan.get("agent_weights", {"scout": 1.0})
@@ -335,12 +289,5 @@ Note: Skip COST if the intent is purely aesthetic and no booking is requested to
         "user_profile": user_profile,
     }
 
-    intent = output["parsed_intent"]
-    activity = intent.get("activity") or "venues"
-    location = intent.get("location") or "Toronto"
-    budget = intent.get("budget") or "any budget"
-    agents = ", ".join(a.replace("_", " ") for a in output["active_agents"])
-    logger.info("[COMMANDER] Looking for %s in %s (%s)", activity, location, budget)
-    logger.info("[COMMANDER] Activating: %s", agents)
-
+    logger.info("[COMMANDER] Node Complete in %.2fs", time.perf_counter() - start_time)
     return output

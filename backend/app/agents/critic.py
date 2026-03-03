@@ -8,6 +8,7 @@ Tools: OpenWeather API, PredictHQ
 import json
 import logging
 import asyncio
+import time
 
 from app.models.state import PathfinderState
 from app.services.openweather import get_weather
@@ -15,147 +16,139 @@ from app.services.predicthq import get_events
 from app.services.gemini import generate_content
 import os
 from app.services.snowflake import SnowflakeIntelligence
+from app.services.cache import search_cache
 
 logger = logging.getLogger(__name__)
 
 
+_CRITIC_BATCH_PROMPT = """
+You are the PATHFINDER Critic Agent. Your job is to find reasons why this plan is TERRIBLE for each specified venue.
+Look for dealbreakers that would ruin the experience (e.g., outdoor activity + heavy rain, traffic jam due to a marathon blocking access).
+
+User Intent: {intent}
+
+Venues to evaluate:
+{venues_context}
+
+For each venue, evaluate against Fast-Fail Conditions:
+1. Condition A: Are there fewer than 3 viable venues after risk filtering?
+2. Condition B: Is there a Top Candidate Veto? (Critical dealbreakers).
+
+OUTPUT FORMAT:
+Return ONLY a JSON object where keys are the VENUE_IDs provided and values are objects with this shape:
+{{
+    "risks": [
+        {{"type": "weather/events", "severity": "high/medium/low", "detail": "explanation"}}
+    ],
+    "fast_fail": true/false,
+    "fast_fail_reason": "short reason if fast_fail is true"
+}}
+"""
+
 async def critic_node(state: PathfinderState) -> PathfinderState:
     """
     Cross-reference top venues with real-world risks.
-
-    Steps
-    -----
-    1. Fetch weather forecast via OpenWeather API.
-    2. Fetch upcoming events / road closures via PredictHQ.
-    3. Identify dealbreakers (rain-prone parks, marathon routes, …).
-    4. If critical: set veto = True → triggers Commander retry.
-    5. Return updated state with risk_flags, veto, veto_reason.
+    BATCHED VERSION: Analyzes Top 3 picks in a single Gemini call.
     """
+    start_time = time.perf_counter()
     candidates = state.get("candidate_venues", [])
-
-    top_candidates = candidates[:3]
-    names = ", ".join(v.get("name", "?") for v in top_candidates)
-    logger.info("[CRITIC] Risk-checking top picks: %s", names)
-
     if not candidates:
         return {"risk_flags": {}, "veto": False, "veto_reason": None}
-    risk_flags = {}
 
-    async def _analyze_venue(venue):
-        lat = venue.get("lat")
-        lng = venue.get("lng")
-        venue_id = venue.get("venue_id", venue.get("name", "unknown"))
-        name = venue.get("name", venue_id)
+    top_candidates = candidates[:3]
+    vids_sorted = sorted([v.get("venue_id", v.get("name", "")) for v in top_candidates])
+    cache_key = f"critic:" + "|".join(vids_sorted)
+    
+    cached = search_cache.get(cache_key)
+    if cached:
+        logger.info("[CRITIC] ⚡️ CACHE HIT for risk checks")
+        return cached
 
-        logger.info("[CRITIC] Checking weather + events near %s...", name)
+    # 1. Fetch external data efficiently (Deduplicate by location)
+    logger.info("[CRITIC] Unique Location Risk Check for %d venues...", len(top_candidates))
+    api_start = time.perf_counter()
+    
+    # Map (lat, lng) to weather/events to avoid redundant neighborhood calls
+    location_cache = {}
+    
+    async def _get_loc_context(lat, lng):
+        loc_key = (round(lat, 3), round(lng, 3)) # Neighborhood granularity
+        if loc_key not in location_cache:
+            # First time for this neighborhood
+            location_cache[loc_key] = asyncio.gather(get_weather(lat, lng), get_events(lat, lng))
+        return await location_cache[loc_key]
 
-        # Parallel fetch
-        weather, events = await asyncio.gather(
-            get_weather(lat, lng),
-            get_events(lat, lng)
-        )
-
-        condition = weather.get("condition", "unknown") if isinstance(weather, dict) else "unknown"
-        n_events = len(events) if isinstance(events, list) else 0
-        logger.info("[CRITIC] %s — %s, %d event%s nearby", name, condition, n_events, "s" if n_events != 1 else "")
-
-        # Prepare context for Gemini
-        context = {
-            "name": name,
-            "category": venue.get("category"),
-            "intent": state.get("parsed_intent", {}),
+    async def _fetch_venue_context(v):
+        lat, lng = v.get("lat"), v.get("lng")
+        weather, events = await _get_loc_context(lat, lng)
+        return {
+            "id": v.get("venue_id", v.get("name", "unknown")),
+            "name": v.get("name"),
+            "category": v.get("category"),
             "weather": weather,
             "events": events
         }
 
-        prompt = f"""
-        You are the PATHFINDER Critic Agent. Your job is to find reasons why this plan is TERRIBLE.
-        Look for dealbreakers that would ruin the experience.
+    contexts = await asyncio.gather(*[_fetch_venue_context(v) for v in top_candidates])
+    logger.info("[CRITIC] Context Fetch took %.2fs (Unique Neighbors: %d)", 
+                time.perf_counter() - api_start, len(location_cache))
+    
+    # 2. Build Batch Prompt
+    venues_context_text = ""
+    for ctx in contexts:
+        venues_context_text += f"ID: {ctx['id']}\nName: {ctx['name']} ({ctx['category']})\nWeather: {json.dumps(ctx['weather'])}\nEvents: {json.dumps(ctx['events'])}\n---\n"
 
-        Context:
-        User Intent: {json.dumps(context['intent'])}
-        Venue: {context['name']} ({context['category']})
-        Weather Profile: {json.dumps(context['weather'])}
-        Upcoming Events Nearby: {json.dumps(context['events'])}
+    prompt = _CRITIC_BATCH_PROMPT.format(
+        intent=json.dumps(state.get("parsed_intent", {})),
+        venues_context=venues_context_text
+    )
 
-        Evaluate the venue against Fast-Fail Conditions:
-        - Condition A: Are there fewer than 3 viable venues after risk filtering? (Assume no for a single venue unless the user intent is extremely strict and this venue wildly misses it alongside weather/event risks).
-        - Condition B: Is there a Top Candidate Veto? (e.g., outdoor activity + heavy rain, traffic jam due to a marathon blocking access).
+    logger.info("[CRITIC] Dispatching Gemini batch call...")
+    gemini_start = time.perf_counter()
+    try:
+        raw = await generate_content(prompt)
+        logger.info("[CRITIC] Gemini batch call took %.2fs", time.perf_counter() - gemini_start)
+        
+        cleaned = raw.strip()
+        if cleaned.startswith("```json"): cleaned = cleaned[7:]
+        elif cleaned.startswith("```"): cleaned = cleaned[3:]
+        if cleaned.endswith("```"): cleaned = cleaned[:-3]
+        
+        batch_results = json.loads(cleaned.strip())
+        
+        risk_flags = {}
+        fast_fail_reason = None
+        
+        sf = SnowflakeIntelligence()
 
-        If either condition is met, trigger a fast-fail.
-
-        Output exact JSON:
-        {{
-            "risks": [
-                {{"type": "weather", "severity": "high/medium/low", "detail": "explanation"}}
-            ],
-            "fast_fail": true/false,
-            "fast_fail_reason": "if true, short reason for early termination"
-        }}
-        """
-
-        try:
-            resp = await generate_content(prompt)
-            if resp.startswith("```json"):
-                resp = resp[7:]
-            if resp.endswith("```"):
-                resp = resp[:-3]
-
-            analysis = json.loads(resp.strip())
+        for venue, ctx in zip(top_candidates, contexts):
+            vid = ctx["id"]
+            analysis = batch_results.get(vid, {"risks": [], "fast_fail": False})
+            
             risks = analysis.get("risks", [])
-            # ── Inject Historical Risks ── 
-            # These bypass LLM hallucinations and forcefully apply risk penalties
+            # Inject Historical Risks
             hist_risks = venue.get("historical_risks", [])
             for hr in hist_risks:
-                risks.append({
-                    "type": "historical_veto",
-                    "severity": "high",
-                    "detail": f"[HISTORICAL RISK] {hr}"
-                })
-            analysis["risks"] = risks
+                risks.append({"type": "historical_veto", "severity": "high", "detail": f"[HISTORICAL RISK] {hr}"})
+            
+            risk_flags[vid] = risks
+            
+            # If Top 1 fails, log it
+            if analysis.get("fast_fail") and vid == top_candidates[0].get("venue_id", top_candidates[0].get("name")):
+                fast_fail_reason = analysis.get("fast_fail_reason")
+                try:
+                    sf.log_risk_event(venue.get("name"), vid, fast_fail_reason, str(ctx["weather"]))
+                    logger.info("[CRITIC] Logged veto to Snowflake for %s", venue.get("name"))
+                except Exception as e:
+                    logger.error("[CRITIC] Snowflake logging failed: %s", e)
 
-            logger.info("[CRITIC] %s → new_risks=%d | hist_risks=%d | fast_fail=%s%s",
-                        name,
-                        len(risks) - len(hist_risks),
-                        len(hist_risks),
-                        analysis.get("fast_fail"),
-                        f" ({analysis.get('fast_fail_reason')})" if analysis.get("fast_fail") else "")
-            for r in risks:
-                logger.info("[CRITIC]   [%s] %s: %s", r.get("severity", "?").upper(), r.get("type", "?"), r.get("detail", ""))
-            return venue_id, analysis, weather
-        except Exception as e:
-            logger.error("[CRITIC] Gemini call failed for %s: %s", venue_id, e)
-            return venue_id, {"risks": [], "fast_fail": False, "fast_fail_reason": None}, {}
+        logger.info("[CRITIC] Node Complete in %.2fs", time.perf_counter() - start_time)
+        
+        result_to_cache = {"risk_flags": risk_flags, "fast_fail": False, "fast_fail_reason": fast_fail_reason, "veto": False, "veto_reason": fast_fail_reason}
+        search_cache.set(cache_key, result_to_cache)
+        return result_to_cache
 
-
-
-    # Run analysis for all top candidates concurrently
-    try:
-        results = await asyncio.gather(*[_analyze_venue(v) for v in top_candidates])
-    except Exception as e:
-        logger.error("[CRITIC] Batch analysis failed: %s", e)
-        results = []
-
-    overall_fast_fail = False
-    fast_fail_reason = None
-
-    for venue_id, analysis, weather in results:
-        risk_flags[venue_id] = analysis.get("risks", [])
-        if analysis.get("fast_fail") and venue_id == top_candidates[0].get("venue_id", top_candidates[0].get("name")):
-            # Instead of halting the graph, log to Snowflake
-            fast_fail_reason = analysis.get("fast_fail_reason")
-            try:
-                sf = SnowflakeIntelligence()
-                venue_name = next((v.get("name") for v in top_candidates if v.get("venue_id", v.get("name")) == venue_id), venue_id)
-                sf.log_risk_event(venue_name, venue_id, fast_fail_reason, str(weather))
-                logger.info("[CRITIC] Logged veto to Snowflake for %s", venue_name)
-            except Exception as e:
-                logger.error("[CRITIC] Failed to log risk event to Snowflake: %s", e)
-
-    logger.info("[CRITIC] ── DONE")
-    if fast_fail_reason:
-        logger.info("[CRITIC] Highest risk logged (graph proceeds): %s", fast_fail_reason)
-    logger.info("[CRITIC] risk_flags:\n%s", json.dumps(risk_flags, indent=2))
-
-    return {"risk_flags": risk_flags, "fast_fail": False, "fast_fail_reason": fast_fail_reason, "veto": False, "veto_reason": fast_fail_reason}
+    except Exception as exc:
+        logger.error("[CRITIC] Batch Gemini call failed: %s", exc)
+        return {"risk_flags": {}, "veto": False, "veto_reason": None}
 

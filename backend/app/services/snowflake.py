@@ -3,11 +3,26 @@ import json
 import os
 from app.core.config import settings
 
+# Global connection singleton to avoid expensive reconnects
+_SF_CONN = None
+
 def get_snowflake_connection():
     """Helper to get a raw connection to Snowflake using centralized settings."""
+    global _SF_CONN
+    
+    # 1. Check if we have an active connection
+    if _SF_CONN:
+        try:
+            # Simple check if connection is still alive
+            if not _SF_CONN.is_closed():
+                return _SF_CONN
+        except:
+            pass
+
+    # 2. Otherwise/Reconnect
     try:
         # Use settings object which correctly loads from .env via Pydantic
-        return snowflake.connector.connect(
+        _SF_CONN = snowflake.connector.connect(
             user=settings.SNOWFLAKE_USER,
             password=settings.SNOWFLAKE_PASSWORD,
             account=settings.SNOWFLAKE_ACCOUNT,
@@ -17,6 +32,7 @@ def get_snowflake_connection():
             role=settings.SNOWFLAKE_ROLE or 'ACCOUNTADMIN',
             autocommit=True
         )
+        return _SF_CONN
     except Exception as e:
         print(f"❌ Snowflake connection error: {e}")
         return None
